@@ -1,28 +1,4 @@
-# Security Concerns
+# Moved
 
-## Current State
+Backend security concerns now live in [../../../docs/roadmap/known-risks.md](../../../docs/roadmap/known-risks.md).
 
-- Public market-data endpoints are open.
-- Admin endpoints are protected only by `HUB_API_KEY`.
-- Browser CORS is origin-allowlisted instead of wildcard.
-- Basic in-memory request rate limiting exists for both public and admin routes.
-- Admin browser access is denied by default unless `HUB_ADMIN_ALLOWED_ORIGINS` is explicitly set.
-- Redis is treated as trusted internal infrastructure.
-
-## Risks
-
-- API-key-only admin protection is sufficient for local/internal use but weak for broader deployment.
-- Public endpoints may expose more backend state than intended once the product matures.
-- There is no user-scoped access control for subscription-specific or plan-specific data.
-
-## Deferred Work
-
-- introduce JWT or equivalent user authentication
-- separate internal operator endpoints from public data endpoints
-- tighten CORS policy for production deployment
-- define rate-limiting and abuse controls
-- define secrets rotation and environment-management expectations
-
-## Recommendation
-
-Before broader production exposure, treat auth hardening as required work, not cleanup.
