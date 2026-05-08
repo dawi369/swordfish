@@ -35,6 +35,7 @@ const STATIC_EXTENSIONS = new Set([
   ".txt",
 ]);
 const WAITLIST_PATH = "/waitlist";
+const HEALTHCHECK_PATH = "/health";
 const AUTH_REFRESH_PREFIXES = ["/terminal", "/billing", "/settings", "/onboarding"];
 const AUTH_REFRESH_PATHS = new Set(["/checkout"]);
 
