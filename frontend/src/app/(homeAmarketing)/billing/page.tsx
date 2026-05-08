@@ -9,8 +9,8 @@ import { Button } from "@/components/ui/button";
 import { PaymentCard } from "@/components/billing/payment-card";
 import { EmptyPaymentCard } from "@/components/billing/payment-card";
 import { CurrentPlanSummary } from "@/components/billing/plan-card";
-import { getUserSubscription, ensureUserSubscription } from "@/lib/supabase/subscriptions";
-import type { Subscription, Transaction } from "@/types/billing.types";
+import { ensureUserSubscription } from "@/lib/supabase/subscriptions";
+import type { Subscription } from "@/types/billing.types";
 
 const ANIMATION_CONFIG = {
   fadeInUp: {
@@ -23,45 +23,48 @@ const ANIMATION_CONFIG = {
 };
 
 export default function BillingPage() {
-  const { user, profile } = useAuth();
+  const { user, profile, loading: authLoading } = useAuth();
   const [subscription, setSubscription] = useState<Subscription | null>(null);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
+
     async function loadSubscription() {
+      if (authLoading) {
+        setLoading(true);
+        return;
+      }
+
       if (!user) {
+        setSubscription(null);
         setLoading(false);
         return;
       }
 
+      setLoading(true);
+
       try {
         // Ensure user has a subscription (creates free tier if none)
         const sub = await ensureUserSubscription(user.id);
+        if (!active) return;
         setSubscription(sub);
-
-        // TODO: Load transactions from billing provider
-        // For now, empty array (will be populated via webhook data)
-        setTransactions([]);
       } catch (error) {
+        if (!active) return;
         console.error("Error loading subscription:", error);
       } finally {
-        setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       }
     }
 
-    loadSubscription();
-  }, [user]);
+    void loadSubscription();
 
-  const handleUpgrade = () => {
-    window.location.href = "/checkout";
-  };
-
-  const handleManage = () => {
-    // TODO: Implement portal flow
-    // This will call billingService.getPortalUrl() once provider is configured
-    console.log("Manage clicked - implement portal flow");
-  };
+    return () => {
+      active = false;
+    };
+  }, [user, authLoading]);
 
   if (loading) {
     return (

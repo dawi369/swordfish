@@ -103,7 +103,7 @@ export async function ensureUserProfile(
 
     if (!existing) {
       // Create profile with default name and email
-      const profileData: any = {
+      const profileData: Pick<UserProfile, "id" | "display_name"> & { email?: string } = {
         id: userId,
         display_name: "Trader",
       };

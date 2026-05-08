@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Terminal, Activity, Scale, Sparkles, FlaskConical } from "lucide-react";
+import { Terminal, Sparkles, FlaskConical } from "lucide-react";
 import { motion } from "framer-motion";
 
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -67,7 +67,7 @@ export function Navbar() {
           <NavigationMenuItem>
             <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
               <Link href="/mission" className="opacity-60 hover:opacity-100 transition-opacity">
-                Mission
+                Thesis
               </Link>
             </NavigationMenuLink>
           </NavigationMenuItem>

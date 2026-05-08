@@ -22,6 +22,7 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
+  profileLoading: boolean;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateProfile: (updates: Partial<UserProfile>) => void;
@@ -33,26 +34,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
   const userRef = useRef<User | null>(null);
   const initializedRef = useRef(false);
+  const profileRequestRef = useRef(0);
 
   const fetchProfile = useCallback(
     async (userId: string, email?: string) => {
-      try {
-        // Run ensure and get in parallel
-        const [isNewUser, userProfile] = await Promise.all([
-          ensureUserProfile(userId, email).catch((e: any) => {
-            console.error("Error ensuring profile:", e);
-            return false;
-          }),
-          getUserProfile(userId).catch((e: any) => {
-            console.error("Error fetching profile:", e);
-            return null;
-          }),
-        ]);
+      const requestId = profileRequestRef.current + 1;
+      profileRequestRef.current = requestId;
+      setProfileLoading(true);
 
+      try {
+        const isNewUser = await ensureUserProfile(userId, email).catch((error: unknown) => {
+          console.error("Error ensuring profile:", error);
+          return false;
+        });
+
+        const userProfile = await getUserProfile(userId).catch((error: unknown) => {
+          console.error("Error fetching profile:", error);
+          return null;
+        });
+
+        if (profileRequestRef.current !== requestId) return;
         setProfile(userProfile);
 
         if (isNewUser) {
@@ -60,6 +66,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         console.error("Error in profile fetch:", error);
+      } finally {
+        if (profileRequestRef.current === requestId) {
+          setProfileLoading(false);
+        }
       }
     },
     [router]
@@ -67,11 +77,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshProfile = useCallback(async () => {
     if (!user) return;
-    const userProfile = await getUserProfile(user.id).catch((e: any) => {
-      console.error("Error refreshing profile:", e);
+    const requestId = profileRequestRef.current + 1;
+    profileRequestRef.current = requestId;
+    setProfileLoading(true);
+    const userProfile = await getUserProfile(user.id).catch((error: unknown) => {
+      console.error("Error refreshing profile:", error);
       return null;
     });
+    if (profileRequestRef.current !== requestId) return;
     setProfile(userProfile);
+    setProfileLoading(false);
   }, [user]);
 
   const updateProfile = useCallback((updates: Partial<UserProfile>) => {
@@ -80,8 +95,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
+    profileRequestRef.current += 1;
     setUser(null);
     setProfile(null);
+    setProfileLoading(false);
     router.push("/");
   }, [supabase, router]);
 
@@ -125,6 +142,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(currentUser);
         if (!currentUser) {
           setProfile(null);
+          setProfileLoading(false);
         }
         setLoading(false);
         initializedRef.current = true;
@@ -139,6 +157,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!active) return;
         setUser(null);
         setProfile(null);
+        setProfileLoading(false);
         setLoading(false);
         initializedRef.current = true;
       }
@@ -165,6 +184,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           userRef.current = null;
           setUser(null);
           setProfile(null);
+          setProfileLoading(false);
           setLoading(false);
         }
         return;
@@ -179,6 +199,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           void fetchProfile(currentUser.id, currentUser.email || undefined);
         } else {
           setProfile(null);
+          setProfileLoading(false);
           setLoading(false);
         }
       }
@@ -209,7 +230,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, profile, loading, signOut, refreshProfile, updateProfile }}
+      value={{
+        user,
+        profile,
+        loading,
+        profileLoading,
+        signOut,
+        refreshProfile,
+        updateProfile,
+      }}
     >
       {children}
     </AuthContext.Provider>

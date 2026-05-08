@@ -2,30 +2,41 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, Lock, ChevronLeft, CheckCircle2 } from "lucide-react";
+import { Loader2, Lock, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/providers/auth-provider";
 import { getUserSubscription } from "@/lib/supabase/subscriptions";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 
 interface SubscriptionGuardProps {
   children: React.ReactNode;
 }
 
 export function SubscriptionGuard({ children }: SubscriptionGuardProps) {
-  const { user } = useAuth();
+  const { user, loading: authLoading, profileLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
 
   useEffect(() => {
+    let active = true;
+
     async function checkSubscription() {
+      if (authLoading || profileLoading) {
+        setLoading(true);
+        return;
+      }
+
       if (!user) {
+        setHasAccess(false);
         setLoading(false);
         return;
       }
 
+      setLoading(true);
+
       try {
         const subscription = await getUserSubscription(user.id);
+        if (!active) return;
         
         // Access Logic: Pro Tier AND (Active OR Trialing OR Past Due)
         const isPro = subscription?.tier === "pro";
@@ -36,15 +47,22 @@ export function SubscriptionGuard({ children }: SubscriptionGuardProps) {
         
         setHasAccess(isPro && isActive);
       } catch (error) {
+        if (!active) return;
         console.error("Error checking subscription:", error);
         setHasAccess(false);
       } finally {
-        setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       }
     }
 
-    checkSubscription();
-  }, [user]);
+    void checkSubscription();
+
+    return () => {
+      active = false;
+    };
+  }, [user, authLoading, profileLoading]);
 
   if (loading) {
     return (

@@ -3,14 +3,22 @@ import { createClient } from "@/utils/supabase/server";
 
 // export const runtime = "edge";
 
+function getSafeNextPath(value: string | null): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/terminal";
+  }
+
+  return value;
+}
+
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
   // if "next" is in param, use it as the redirect URL
-  const next = searchParams.get("next") ?? "/terminal";
-  const redirectToCompletion = (host: string) => {
+  const next = getSafeNextPath(searchParams.get("next"));
+  const redirectToCompletion = (host: string, destination: string) => {
     const completionUrl = new URL("/auth/complete", host);
-    completionUrl.searchParams.set("next", next);
+    completionUrl.searchParams.set("next", destination);
     return completionUrl;
   };
 
@@ -42,11 +50,11 @@ export async function GET(request: Request) {
 
       if (isLocalEnv) {
         // we can be stricter about redirects on production
-        return NextResponse.redirect(redirectToCompletion(origin));
+        return NextResponse.redirect(redirectToCompletion(origin, destination));
       } else if (forwardedHost) {
-        return NextResponse.redirect(redirectToCompletion(`https://${forwardedHost}`));
+        return NextResponse.redirect(redirectToCompletion(`https://${forwardedHost}`, destination));
       } else {
-        return NextResponse.redirect(redirectToCompletion(origin));
+        return NextResponse.redirect(redirectToCompletion(origin, destination));
       }
     }
   }
