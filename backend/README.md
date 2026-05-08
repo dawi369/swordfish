@@ -80,10 +80,10 @@ curl http://localhost:3001/sessions/week/ESM6 | jq
 
 Start here:
 
-- [docs/README.md](./docs/README.md)
-- [docs/operations.md](./docs/operations.md)
-- [docs/api-reference.md](./docs/api-reference.md)
-- [docs/system-overview.md](./docs/system-overview.md)
+- [../docs/backend/README.md](../docs/backend/README.md)
+- [../docs/backend/operations.md](../docs/backend/operations.md)
+- [../docs/backend/api.md](../docs/backend/api.md)
+- [../docs/architecture/data-flow.md](../docs/architecture/data-flow.md)
 
 ## Troubleshooting
 

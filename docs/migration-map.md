@@ -2,6 +2,8 @@
 
 This file tracks how existing docs were folded into the new structure.
 
+After migration, the old duplicate docs were deleted so the root `docs/` tree is the source of truth.
+
 | Current doc | Destination | Action |
 |---|---|---|
 | `README.md` | `docs/README.md`, `docs/architecture/system-context.md` | Repo overview folded into docs index and system context |
@@ -19,4 +21,3 @@ This file tracks how existing docs were folded into the new structure.
 | `backend/docs/futures-contract-management.md` | `docs/backend/provider-integrations.md`, `docs/backend/jobs-and-scheduling.md` | Split by provider/contract behavior and scheduled jobs |
 | `backend/docs/concerns/*` | `docs/roadmap/known-risks.md` | Folded into tracked risks |
 | `frontend/docs/*` | unchanged for now | Frontend implementation docs stay service-local until frontend refactor work starts |
-
