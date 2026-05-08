@@ -12,7 +12,7 @@
 
 - TimescaleDB
 - long-window historical analytics
-- self-serve billing completion
+- self-serve billing completion through Polar
 - AI Lab
 - backtesting
 
@@ -62,4 +62,3 @@ Redis is the backend hot-path source of truth. It is not a durable long-term war
 - `backend/src/jobs/*`
 - `backend/src/utils/contract_provider.ts`
 - `backend/src/utils/front_month_resolver.ts`
-

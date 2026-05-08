@@ -14,12 +14,12 @@ The beta frontend is centered on:
 
 - AI Lab and Backtesting are placeholder surfaces
 - curve mode is scaffolded, not product-ready
-- some charts/settings code still has a lint cleanup backlog
+- lint exits cleanly, but unused-variable and hook-dependency warnings remain
 - quality is strongest in the connection/data layer; broader UI test coverage is still limited
 
 ## Non-Goals For This Beta
 
-- full billing and account management
+- full Polar billing integration and account management
 - advanced narrative/sentiment products
 - provider-direct browser integrations
 - speculative UI for unsupported market data
