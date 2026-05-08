@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowLeft, ShieldCheck, Wrench } from "lucide-react";
+import { ArrowLeft, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const ANIMATION_CONFIG = {
@@ -57,16 +57,10 @@ export default function CheckoutPage() {
                 </p>
               </div>
 
-              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck aria-hidden="true" className="h-4 w-4 text-green" />
-                  <p className="text-sm font-medium text-foreground">Hosted payment flow</p>
-                </div>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  No card data should be collected inside Swordfish. Polar will own checkout,
-                  customer portal, invoices, and payment method updates.
-                </p>
-              </div>
+              <p className="border-t border-white/10 pt-5 text-sm leading-6 text-muted-foreground">
+                No card data should be collected inside Swordfish. Polar will own checkout,
+                customer portal, invoices, and payment method updates.
+              </p>
 
               <div className="flex flex-wrap gap-3">
                 <Button asChild className="rounded-md bg-white text-black hover:bg-white/90">

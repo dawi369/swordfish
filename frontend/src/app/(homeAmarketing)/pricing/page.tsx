@@ -70,8 +70,8 @@ export default function PricingPage() {
                   </p>
                 </div>
 
-                <div className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] p-5 md:min-w-48">
-                  <div className="flex items-end gap-2">
+                <div className="shrink-0 md:min-w-48 md:text-right">
+                  <div className="flex items-end gap-2 md:justify-end">
                     <span className="font-space text-5xl font-semibold leading-none tracking-tight text-foreground">
                       {proPlan.priceDisplay}
                     </span>
@@ -112,15 +112,6 @@ export default function PricingPage() {
                 </div>
               ))}
             </div>
-          </motion.section>
-
-          <motion.section variants={ANIMATION_CONFIG.fadeInUp} className="text-center">
-            <a
-              href="mailto:support@swordfish.com"
-              className="text-sm text-muted-foreground underline underline-offset-4 transition hover:text-foreground"
-            >
-              Questions about pricing? Contact support.
-            </a>
           </motion.section>
         </motion.div>
       </div>

@@ -10,7 +10,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -115,9 +114,6 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   </CardContent>
-                  <CardFooter className="flex justify-end border-t p-6">
-                    <Button disabled>Coming Soon</Button>
-                  </CardFooter>
                 </Card>
               </TabsContent>
 
@@ -155,9 +151,6 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   </CardContent>
-                  <CardFooter className="flex justify-end border-t p-6">
-                    <Button disabled>Coming Soon</Button>
-                  </CardFooter>
                 </Card>
               </TabsContent>
             </Tabs>
@@ -236,7 +229,7 @@ function ProfileSettingsCard({ email, profile, userId, onSaved }: ProfileSetting
           </p>
         </div>
       </CardContent>
-      <CardFooter className="flex justify-end border-t p-6">
+      <div className="flex justify-end border-t p-6">
         <Button onClick={handleSaveProfile} disabled={isSaving}>
           {isSaving ? (
             <>
@@ -247,7 +240,7 @@ function ProfileSettingsCard({ email, profile, userId, onSaved }: ProfileSetting
             "Save Changes"
           )}
         </Button>
-      </CardFooter>
+      </div>
     </Card>
   );
 }

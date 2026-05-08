@@ -152,7 +152,7 @@ export default function BillingPage() {
                   </p>
                 </div>
 
-                <div className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] p-5 md:min-w-52">
+                <div className="shrink-0 md:min-w-52 md:text-right">
                   <p className="font-mono text-xs uppercase tracking-[0.24em] text-muted-foreground">
                     Status
                   </p>
