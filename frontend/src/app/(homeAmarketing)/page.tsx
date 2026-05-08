@@ -1,12 +1,8 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, Zap, Shield, BarChart3, Globe, Sparkles, Cpu } from "lucide-react";
-import Link from "next/link";
-import Image from "next/image";
 import { ScrambleTitle } from "@/components/home/scramble-title";
-import { PlatformDemoSection } from "@/components/home/platform-demo-section";
 import { ANIMATION_CONFIG, SCRAMBLE_DELAYS } from "@/app/(homeAmarketing)/constants";
 import { useUIStore } from "@/store/use-ui-store";
 
@@ -24,6 +20,14 @@ export default function Home() {
   const { setIsHoveringBackground } = useUIStore();
 
   const marketStatus = useMarketStatus();
+
+  useEffect(() => {
+    const currentUrl = new URL(window.location.href);
+    if (!currentUrl.searchParams.has("code")) return;
+
+    currentUrl.pathname = "/auth/callback";
+    window.location.replace(currentUrl.toString());
+  }, []);
 
   return (
     <div className="min-h-screen text-white selection:bg-primary/30 selection:text-primary-foreground overflow-x-hidden">

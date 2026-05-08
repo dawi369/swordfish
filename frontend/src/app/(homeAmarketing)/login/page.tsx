@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input";
 import { motion } from "framer-motion";
 import { Mail, AlertCircle, CheckCircle2, ArrowRight, Loader2 } from "lucide-react";
 import Link from "next/link";
-import { NEXT_PUBLIC_SITE_URL } from "@/config/env";
 import { ANALYTICS_EVENTS, captureAnalyticsEvent } from "@/lib/analytics";
 
 // OAuth provider icons
@@ -46,6 +45,10 @@ const GitHubIcon = () => (
 
 type OAuthProvider = "google" | "apple" | "github";
 
+function getAuthCallbackUrl() {
+  return `${window.location.origin}/auth/callback`;
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -63,7 +66,7 @@ export default function LoginPage() {
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
-          emailRedirectTo: `${NEXT_PUBLIC_SITE_URL}/auth/callback`,
+          emailRedirectTo: getAuthCallbackUrl(),
         },
       });
 
@@ -75,7 +78,7 @@ export default function LoginPage() {
         });
         setSuccess(true);
       }
-    } catch (err) {
+    } catch {
       setError("An unexpected error occurred");
     } finally {
       setLoading(false);
@@ -92,11 +95,11 @@ export default function LoginPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
-          redirectTo: `${NEXT_PUBLIC_SITE_URL}/auth/callback`,
+          redirectTo: getAuthCallbackUrl(),
         },
       });
       if (error) throw error;
-    } catch (err) {
+    } catch {
       setError("An unexpected error occurred");
       setOauthLoading(null);
     }

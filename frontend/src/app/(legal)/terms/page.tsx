@@ -41,7 +41,7 @@ export default function TermsPage() {
                 1. Acceptance of Terms
               </h2>
               <p className="leading-relaxed">
-                By accessing and using Swordfish ("the Platform"), you agree to be
+                By accessing and using Swordfish (&quot;the Platform&quot;), you agree to be
                 bound by these Terms of Service. If you do not agree to these
                 terms, please do not use our services. The Platform provides market
                 analysis tools and data visualization for informational purposes

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +23,7 @@ function DebugPanel() {
   const [endpointData, setEndpointData] = useState<{ endpoint: string; status: number; preview: string } | null>(null);
   const [isChecking, setIsChecking] = useState(false);
 
-  const checkEndpoint = async () => {
+  const checkEndpoint = useCallback(async () => {
     setIsChecking(true);
     try {
       const res = await fetch(`${NEXT_PUBLIC_HUB_URL}/symbols`);
@@ -43,11 +43,14 @@ function DebugPanel() {
     } finally {
       setIsChecking(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    checkEndpoint();
-  }, []);
+    const timeoutId = window.setTimeout(() => {
+      void checkEndpoint();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [checkEndpoint]);
 
   const stats = useMemo(() => {
     const frontSymbols = Object.keys(entitiesFront);

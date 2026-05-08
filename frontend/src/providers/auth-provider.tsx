@@ -220,7 +220,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       posthog.identify(user.id, {
         email: user.email,
         auth_provider: profile?.auth_provider ?? undefined,
-        display_name: profile?.display_name ?? undefined,
+        display_name: profile?.first_name ?? undefined,
       });
       return;
     }

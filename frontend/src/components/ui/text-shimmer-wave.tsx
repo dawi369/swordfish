@@ -1,11 +1,10 @@
 "use client";
-import { type JSX } from "react";
 import { motion, Transition } from "motion/react";
 import { cn } from "@/lib/utils";
 
 export type TextShimmerWaveProps = {
   children: string;
-  as?: React.ElementType;
+  as?: "span" | "p";
   className?: string;
   duration?: number;
   zDistance?: number;
@@ -16,6 +15,11 @@ export type TextShimmerWaveProps = {
   rotateYDistance?: number;
   transition?: Transition;
 };
+
+const MOTION_COMPONENTS = {
+  p: motion.p,
+  span: motion.span,
+} as const;
 
 export function TextShimmerWave({
   children,
@@ -30,7 +34,7 @@ export function TextShimmerWave({
   rotateYDistance = 10,
   transition,
 }: TextShimmerWaveProps) {
-  const MotionComponent = motion.create(Component as keyof JSX.IntrinsicElements);
+  const MotionComponent = MOTION_COMPONENTS[Component];
 
   return (
     <MotionComponent

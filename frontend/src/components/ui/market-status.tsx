@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
 
 export function MarketStatus() {
   const [status, setStatus] = useState<{
@@ -21,14 +20,13 @@ export function MarketStatus() {
 
       const day = etDate.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
       const hour = etDate.getHours();
-      const minute = etDate.getMinutes();
 
       // Market Hours (ET):
       // Open: Sunday 18:00 to Friday 17:00
       // Daily Break: Mon-Thu 17:00 to 18:00
 
       let isOpen = false;
-      let nextOpenDate = new Date(etDate);
+      const nextOpenDate = new Date(etDate);
 
       // Check if Weekend Closed
       // Friday >= 17:00

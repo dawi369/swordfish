@@ -3,14 +3,11 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { CreditCard, Plus } from "lucide-react";
+import { ArrowRight, Loader2, ReceiptText } from "lucide-react";
 import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
-import { PaymentCard } from "@/components/billing/payment-card";
-import { EmptyPaymentCard } from "@/components/billing/payment-card";
-import { CurrentPlanSummary } from "@/components/billing/plan-card";
 import { ensureUserSubscription } from "@/lib/supabase/subscriptions";
-import type { Subscription } from "@/types/billing.types";
+import { isSubscriptionActive, TIER_CONFIG, type Subscription } from "@/types/billing.types";
 
 const ANIMATION_CONFIG = {
   fadeInUp: {
@@ -22,8 +19,46 @@ const ANIMATION_CONFIG = {
   },
 };
 
+function formatBillingDate(value: string | null | undefined) {
+  if (!value) return "No scheduled billing cycle";
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(value));
+}
+
+function getStatusLabel(subscription: Subscription | null) {
+  if (!subscription) return "Not configured";
+
+  if (subscription.status === "trialing") return "Trial running";
+  if (subscription.status === "past_due") return "Past due";
+  if (subscription.status === "incomplete") return "Setup incomplete";
+  if (subscription.status === "paused") return "Paused";
+  if (subscription.status === "canceled") return "Canceled";
+  if (subscription.status === "unpaid") return "Unpaid";
+  return "Active";
+}
+
+function getBillingAction(subscription: Subscription | null) {
+  const isPro = subscription?.tier === "pro";
+
+  if (isPro) {
+    return {
+      href: "/billing/portal",
+      label: "Manage billing",
+    };
+  }
+
+  return {
+    href: "/checkout",
+    label: "Upgrade to Pro",
+  };
+}
+
 export default function BillingPage() {
-  const { user, profile, loading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -70,59 +105,74 @@ export default function BillingPage() {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent" />
+          <Loader2 className="mx-auto h-8 w-8 animate-spin text-muted-foreground" />
           <p className="mt-4 text-muted-foreground">Loading billing...</p>
         </div>
       </div>
     );
   }
 
+  const billingAction = getBillingAction(subscription);
+
   return (
-    <div className="min-h-screen">
-      <div className="relative z-10 mx-auto max-w-6xl px-6 py-12 md:py-16">
-        <motion.div initial="initial" animate="animate" variants={ANIMATION_CONFIG.stagger}>
-          <motion.header variants={ANIMATION_CONFIG.fadeInUp} className="mb-10">
-            <h1 className="max-w-3xl text-balance font-space text-4xl font-semibold tracking-[-0.05em] text-foreground md:text-5xl">
+    <div className="min-h-screen relative overflow-hidden">
+      <div className="relative z-10 mx-auto max-w-4xl px-6 py-24">
+        <motion.div
+          initial="initial"
+          animate="animate"
+          variants={ANIMATION_CONFIG.stagger}
+          className="space-y-10"
+        >
+          <motion.header variants={ANIMATION_CONFIG.fadeInUp}>
+            <h1 className="font-space text-4xl font-bold tracking-tight text-foreground md:text-5xl">
               Billing
             </h1>
+            <p className="mt-4 max-w-2xl text-lg leading-relaxed text-muted-foreground">
+              Manage your plan, access state, and payment method.
+            </p>
           </motion.header>
 
-          <motion.section variants={ANIMATION_CONFIG.fadeInUp} className="mb-10">
-            <CurrentPlanSummary subscription={subscription} />
-          </motion.section>
-
-          <motion.section variants={ANIMATION_CONFIG.fadeInUp} className="mb-10">
-            <div className="rounded-[32px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.015))] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.2)]">
-              <div className="mb-5 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white/6">
-                    <CreditCard aria-hidden="true" className="h-4 w-4 text-white/72" />
+          <motion.section variants={ANIMATION_CONFIG.fadeInUp}>
+            <div className="rounded-lg border border-white/10 bg-black/35 p-6 backdrop-blur-md md:p-8">
+              <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="mb-8 flex h-12 w-12 items-center justify-center rounded-md border border-amber-400/20 bg-amber-400/10 text-amber-300">
+                    <ReceiptText className="h-6 w-6" />
                   </div>
-                  <h2 className="font-space text-2xl font-semibold tracking-[-0.04em] text-foreground">
-                    Payment Method
+                  <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                    Current plan
+                  </p>
+                  <h2 className="mt-3 font-space text-3xl font-semibold tracking-tight text-foreground md:text-4xl">
+                    {TIER_CONFIG[subscription?.tier || "free"].name}
                   </h2>
+                  <p className="mt-5 max-w-xl text-base leading-relaxed text-muted-foreground">
+                    {isSubscriptionActive(subscription)
+                      ? "Terminal access is enabled."
+                      : "Terminal access is limited until billing is active."}
+                  </p>
                 </div>
-                <Button
-                  asChild
-                  variant="outline"
-                  size="sm"
-                  className="rounded-full border-white/12 bg-white/4 hover:bg-white/8"
-                >
-                  <Link href="/checkout">
-                    <Plus aria-hidden="true" className="mr-1 h-4 w-4" />
-                    Add Card
+
+                <div className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] p-5 md:min-w-52">
+                  <p className="font-mono text-xs uppercase tracking-[0.24em] text-muted-foreground">
+                    Status
+                  </p>
+                  <p className="mt-3 text-lg font-medium text-foreground">
+                    {getStatusLabel(subscription)}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {formatBillingDate(subscription?.currentPeriodEnd)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-8">
+                <Button asChild className="rounded-md bg-white text-black hover:bg-white/90">
+                  <Link href={billingAction.href}>
+                    {billingAction.label}
+                    <ArrowRight className="h-4 w-4" />
                   </Link>
                 </Button>
               </div>
-              {subscription?.paymentMethod ? (
-                <PaymentCard
-                  paymentMethod={subscription.paymentMethod}
-                  cardHolder={profile?.display_name || user?.email || "Card Holder"}
-                  isActive
-                />
-              ) : (
-                <EmptyPaymentCard />
-              )}
             </div>
           </motion.section>
         </motion.div>

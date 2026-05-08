@@ -1,4 +1,3 @@
-import { Perf } from "r3f-perf";
 import { Effects } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useControls } from "leva";
@@ -15,7 +14,7 @@ interface GLProps {
 
 // Component to animate vignette darkness smoothly
 function AnimatedVignette({ targetDarkness, offset }: { targetDarkness: number; offset: number }) {
-  const shaderRef = useRef<any>(null);
+  const shaderRef = useRef<{ uniforms: { darkness: { value: number } } } | null>(null);
   const darknessRef = useRef({ value: targetDarkness });
 
   useFrame((_, delta) => {
@@ -30,7 +29,7 @@ function AnimatedVignette({ targetDarkness, offset }: { targetDarkness: number; 
     <shaderPass
       ref={shaderRef}
       args={[VignetteShader]}
-      uniforms-darkness-value={darknessRef.current.value}
+      uniforms-darkness-value={targetDarkness}
       uniforms-offset-value={offset}
     />
   );

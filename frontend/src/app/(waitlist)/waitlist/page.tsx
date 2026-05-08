@@ -157,7 +157,7 @@ export default function WaitlistPage() {
                   </p>
                 )}
                 <p className="text-center text-s text-white/50 italic">
-                  Don't use your grandpa's tools.
+                  Don&apos;t use your grandpa&apos;s tools.
                 </p>
               </form>
             </div>

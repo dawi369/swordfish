@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { STATS_DATA } from "@/app/(homeAmarketing)/constants";
 
 interface StatsDisplayProps {
-  variants?: any;
+  variants?: React.ComponentProps<typeof motion.div>["variants"];
 }
 
 export function StatsDisplay({ variants }: StatsDisplayProps) {
