@@ -153,6 +153,12 @@ export function useChartHistory({
   const requestIdRef = useRef(0);
   const lastSeenRef = useRef<Map<string, string>>(new Map());
 
+  const deferReadyState = (nextReady: boolean) => {
+    window.setTimeout(() => {
+      setIsReady(nextReady);
+    }, 0);
+  };
+
   // Stable primitive keys for effects
   const rangeKey = useMemo(() => {
     if (!rangeOverride) return "default";
@@ -176,7 +182,7 @@ export function useChartHistory({
 
   useEffect(() => {
     if (!enabled) {
-      if (isReady) setIsReady(false);
+      if (isReady) deferReadyState(false);
       return;
     }
 
@@ -185,7 +191,7 @@ export function useChartHistory({
 
     seriesKeyRef.current = nextKey;
     lastSeenRef.current.clear();
-    if (isReady) setIsReady(false);
+    if (isReady) deferReadyState(false);
 
     // Keep existing data until new history arrives to avoid flicker.
   }, [enabled, timeframe, symbolKey, rangeKey]);
@@ -195,12 +201,14 @@ export function useChartHistory({
 
   useEffect(() => {
     if (!enabled || uniqueSymbols.length === 0) {
-      if (isReady) setIsReady(false);
+      if (isReady) deferReadyState(false);
       // Only clear if there's data (prevents loop when already empty)
-      setSeriesBySymbol((prev) => {
-        if (Object.keys(prev).length === 0) return prev;
-        return {};
-      });
+      window.setTimeout(() => {
+        setSeriesBySymbol((prev) => {
+          if (Object.keys(prev).length === 0) return prev;
+          return {};
+        });
+      }, 0);
       return;
     }
 
@@ -212,7 +220,7 @@ export function useChartHistory({
     abortRef.current = controller;
     requestIdRef.current += 1;
     const requestId = requestIdRef.current;
-    if (isReady) setIsReady(false);
+    if (isReady) deferReadyState(false);
 
     const range = excludeLiveBucketFromRange(
       buildRange(timeframe, rangeOverride, windowMs),
@@ -221,8 +229,10 @@ export function useChartHistory({
     const { start, end } = range;
 
     if (end < start) {
-      setSeriesBySymbol({});
-      setIsReady(true);
+      window.setTimeout(() => {
+        setSeriesBySymbol({});
+        setIsReady(true);
+      }, 0);
       return () => {
         controller.abort();
       };

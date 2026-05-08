@@ -14,11 +14,11 @@ export const WaitlistEmail: React.FC<WaitlistEmailProps> = ({ email }) => (
       professional high-fidelity terminal for futures traders.
     </p>
     <p>
-      We've secured your spot for <strong>{email}</strong>.
+      We&apos;ve secured your spot for <strong>{email}</strong>.
     </p>
     <p>
       We are currently heads-down building the most advanced trading interface
-      on the market. You'll be among the first to get access when we open up.
+      on the market. You&apos;ll be among the first to get access when we open up.
     </p>
     <hr style={{ margin: "30px 0", borderTop: "1px solid #eaeaea" }} />
     <p style={{ fontSize: "14px", color: "#666" }}>

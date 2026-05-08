@@ -297,16 +297,17 @@ export const TickerEntry = React.memo(({ symbol, className }: TickerEntryProps) 
     [symbol, bars, entity?.latestBar, snapshot, session]
   );
 
-  const volumeValue = useMemo(() => {
-    if (session && Number.isFinite(session.volNow) && session.volNow > 0) return session.volNow;
-    if (entity?.latestBar && Number.isFinite(entity.latestBar.volume)) return entity.latestBar.volume;
-    return snapshotData.cum_volume;
-  }, [session, entity?.latestBar, snapshotData.cum_volume]);
+  const volumeValue =
+    session && Number.isFinite(session.volNow) && session.volNow > 0
+      ? session.volNow
+      : entity?.latestBar && Number.isFinite(entity.latestBar.volume)
+        ? entity.latestBar.volume
+        : snapshotData.cum_volume;
 
-  const vwapValue = useMemo(() => {
-    if (session && Number.isFinite(session.vwap) && session.vwap > 0) return session.vwap;
-    return snapshotData.vwap;
-  }, [session, snapshotData.vwap]);
+  const vwapValue =
+    session && Number.isFinite(session.vwap) && session.vwap > 0
+      ? session.vwap
+      : snapshotData.vwap;
 
   const isSelected = selection.selected.includes(symbol) && !isModalOpen;
   const isPrimary = selection.primary === symbol && !isModalOpen;

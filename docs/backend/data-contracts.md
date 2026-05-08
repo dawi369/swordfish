@@ -1,6 +1,6 @@
-# Data Structures
+# Backend Data Contracts
 
-Canonical payload shapes used by the backend today.
+These are the canonical backend payload shapes used by current docs and source.
 
 ## Bar
 
@@ -44,6 +44,11 @@ interface SnapshotData {
 type IndicatorBucket = "low" | "mid" | "high";
 
 interface SessionData {
+  sessionId: string;
+  sessionStartTime: number;
+  sessionEndTime: number;
+  rootSymbol: string;
+  timezone: string;
   dayOpen: number;
   dayHigh: number;
   dayLow: number;
@@ -100,12 +105,10 @@ interface FrontMonthInfo {
 }
 ```
 
-## Current Persistence Model
+## Persistence Notes
 
-- Redis is the only required store in the active runtime.
-- Recovery backfill state is persisted locally in `runtime/recovery/recovery.sqlite`.
-- TimescaleDB remains a deferred historical-store abstraction.
-- Time-series bars in Redis are retained for 7 days.
-- Active-contract cache and front-month cache survive daily clears.
+- Bars are stored as latest hash values, RedisTimeSeries fields, and stream payloads.
+- Sessions are stored as hashes keyed by symbol and session id.
+- Snapshots are stored as hashes keyed by symbol.
+- Active contracts and front-month cache are JSON strings.
 
-Historical persistence and derived long-window analytics are tracked in [concerns/historical-data.md](./concerns/historical-data.md).

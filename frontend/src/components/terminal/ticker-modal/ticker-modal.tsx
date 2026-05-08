@@ -162,8 +162,9 @@ export function TickerModal() {
   const descriptionId = useId();
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | undefined>(undefined);
-  const [activeRangePreset, setActiveRangePreset] = useState<RangePresetId | null>(null);
-  const rangePresetInitializedRef = useRef(false);
+  const [activeRangePreset, setActiveRangePreset] = useState<RangePresetId | null>(() =>
+    settings.rangePreset === "custom" ? null : settings.rangePreset,
+  );
   
   // Chart display state machine
   const [chartDisplayState, setChartDisplayState] = useState<ChartDisplayState>('hidden');
@@ -173,7 +174,7 @@ export function TickerModal() {
   // Reset display state when modal closes (component persists — hooks don't remount)
   useEffect(() => {
     if (!isOpen) {
-      setChartDisplayState('hidden');
+      window.setTimeout(() => setChartDisplayState('hidden'), 0);
       currentFitKeyRef.current = null;
       if (safetyTimerRef.current) {
         window.clearTimeout(safetyTimerRef.current);
@@ -207,7 +208,7 @@ export function TickerModal() {
       if (chartDisplayState === 'hidden') {
         // Wait for data to be ready before showing
         if (series.isHistoryReady) {
-          setChartDisplayState('fitting');
+          window.setTimeout(() => setChartDisplayState('fitting'), 0);
         }
       }
     }
@@ -216,7 +217,7 @@ export function TickerModal() {
   // When history becomes ready, transition to fitting
   useEffect(() => {
     if (series.isHistoryReady && chartDisplayState === 'hidden') {
-      setChartDisplayState('fitting');
+      window.setTimeout(() => setChartDisplayState('fitting'), 0);
     }
   }, [series.isHistoryReady, chartDisplayState]);
 
@@ -236,17 +237,6 @@ export function TickerModal() {
       }
     };
   }, [chartDisplayState]);
-
-  useEffect(() => {
-    if (settings.rangePreset === "custom") {
-      setActiveRangePreset(null);
-      return;
-    }
-    if (!rangePresetInitializedRef.current) {
-      setActiveRangePreset(settings.rangePreset);
-      rangePresetInitializedRef.current = true;
-    }
-  }, [settings.rangePreset]);
 
   const handleRangePresetChange = useCallback(
     (preset: "custom" | RangePresetId) => {

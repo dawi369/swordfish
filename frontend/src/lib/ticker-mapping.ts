@@ -12,7 +12,7 @@ export interface TickerConfig {
   asset_sub_class?: string;
   name: string;
   product_code: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 const ALL_TICKERS: Record<AssetClassId, TickerConfig[]> = {

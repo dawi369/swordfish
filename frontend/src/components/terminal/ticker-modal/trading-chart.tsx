@@ -73,8 +73,9 @@ export function TradingChart({
   }>({});
 
   const useLinePrimary = lineData !== undefined;
-  const windowSizeRef = useRef(Math.max(10, visibleBars));
-  const rightOffsetRef = useRef(Math.max(2, Math.floor(windowSizeRef.current * 0.2)));
+  const initialWindowSize = Math.max(10, visibleBars);
+  const windowSizeRef = useRef(initialWindowSize);
+  const rightOffsetRef = useRef(Math.max(2, Math.floor(initialWindowSize * 0.2)));
 
   // Initialize chart
   const initChart = useCallback(() => {

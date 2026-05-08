@@ -175,7 +175,7 @@ function DockItem({ children, className, onClick }: DockItemProps) {
 }
 
 function DockLabel({ children, className, ...rest }: DockLabelProps) {
-  const { isHovered: _isHovered, width: _width, ...domProps } = rest as any;
+  const { isHovered: _isHovered, width: _width, ...domProps } = rest;
   const isHovered = _isHovered as MotionValue<number>;
   const [isVisible, setIsVisible] = useState(false);
 
@@ -212,7 +212,7 @@ function DockLabel({ children, className, ...rest }: DockLabelProps) {
 }
 
 function DockIcon({ children, className, ...rest }: DockIconProps) {
-  const { width: _width, isHovered: _isHovered, ...domProps } = rest as any;
+  const { width: _width, isHovered: _isHovered, ...domProps } = rest;
   const width = _width as MotionValue<number>;
 
   const widthTransform = useTransform(width, (val) => val / 2);

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -154,29 +154,25 @@ export function Spotlight() {
   const addComparison = useTickerStore((state) => state.addComparison);
   const defaultCommands = useDefaultCommands();
   
-  // Prevent hydration mismatch - Radix Dialog generates different IDs on server vs client
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
   const [query, setQuery] = useState("");
-  const [tickerResults, setTickerResults] = useState<TickerSearchResult[]>([]);
 
   // Register default commands on mount
   useEffect(() => {
-    setMounted(true);
     registerCommands(defaultCommands);
     return () => {
       unregisterCommands(defaultCommands.map((c) => c.id));
     };
   }, [defaultCommands, registerCommands, unregisterCommands]);
 
-  // Handle ticker search
-  useEffect(() => {
-    if (query) {
-      const results = searchTickers(query, entities, series, snapshots, sessions);
-      setTickerResults(results);
-    } else {
-      setTickerResults([]);
-    }
-  }, [query, entities, series, snapshots, sessions]);
+  const tickerResults = useMemo(
+    () => searchTickers(query, entities, series, snapshots, sessions),
+    [query, entities, series, snapshots, sessions]
+  );
 
   // Keyboard shortcut handler - Ctrl+K or Cmd+K
   useEffect(() => {

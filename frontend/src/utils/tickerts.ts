@@ -1,7 +1,7 @@
 // Purpose: Dynamically load and access tickers by asset class, with one-liner access by product_code/ticker, e.g. tickers.grains.ZC or tickers.all.ES
 
 interface TickerEntry {
-  [key: string]: any;
+  [key: string]: unknown;
   asset_class: string;
   asset_sub_class: string;
   date: string;

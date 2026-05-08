@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useRef, useSyncExternalStore } from "react";
 import { MotionValue, motion, useScroll, useTransform } from "motion/react";
 import { cn } from "@/lib/utils";
 import {
@@ -42,13 +42,14 @@ export const MacbookScroll = ({
     offset: ["start start", "end start"],
   });
 
-  const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    if (window && window.innerWidth < 768) {
-      setIsMobile(true);
-    }
-  }, []);
+  const isMobile = useSyncExternalStore(
+    (onStoreChange) => {
+      window.addEventListener("resize", onStoreChange);
+      return () => window.removeEventListener("resize", onStoreChange);
+    },
+    () => window.innerWidth < 768,
+    () => false,
+  );
 
   const scaleX = useTransform(
     scrollYProgress,

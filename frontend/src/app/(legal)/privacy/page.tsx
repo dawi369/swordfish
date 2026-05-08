@@ -41,7 +41,7 @@ export default function PrivacyPage() {
                 1. Introduction
               </h2>
               <p className="leading-relaxed">
-                At Swordfish ("we," "our," or "us"), we respect your privacy and
+                At Swordfish (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;), we respect your privacy and
                 are committed to protecting your personal data. This Privacy Policy
                 explains how we collect, use, disclose, and safeguard your
                 information when you use our trading analysis platform.

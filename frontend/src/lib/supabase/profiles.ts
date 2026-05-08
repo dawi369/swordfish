@@ -5,7 +5,6 @@ export interface UserProfile {
   email?: string;
   first_name: string | null;
   last_name: string | null;
-  display_name: string | null;
   auth_provider: string | null;
   created_at?: string;
   updated_at?: string;
@@ -21,7 +20,7 @@ export async function getUserProfile(
 
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, email, first_name, last_name, display_name, auth_provider, created_at, updated_at")
+    .select("id, email, first_name, last_name, auth_provider, created_at, updated_at")
     .eq("id", userId)
     .single();
 
@@ -45,7 +44,6 @@ export async function getUserProfile(
 export interface ProfileUpdate {
   first_name?: string | null;
   last_name?: string | null;
-  display_name?: string | null;
 }
 
 export async function updateProfile(
@@ -103,9 +101,9 @@ export async function ensureUserProfile(
 
     if (!existing) {
       // Create profile with default name and email
-      const profileData: any = {
+      const profileData: Pick<UserProfile, "id" | "first_name"> & { email?: string } = {
         id: userId,
-        display_name: "Trader",
+        first_name: "Trader",
       };
 
       // Add email if provided

@@ -8,6 +8,14 @@ import { createClient } from "@/utils/supabase/client";
 const SESSION_POLL_INTERVAL_MS = 250;
 const SESSION_POLL_TIMEOUT_MS = 8_000;
 
+function getSafeNextPath(value: string | null): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/terminal";
+  }
+
+  return value;
+}
+
 function AuthCompleteContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -15,7 +23,7 @@ function AuthCompleteContent() {
 
   useEffect(() => {
     const supabase = createClient();
-    const next = searchParams.get("next") ?? "/terminal";
+    const next = getSafeNextPath(searchParams.get("next"));
     let active = true;
     const startedAt = Date.now();
 

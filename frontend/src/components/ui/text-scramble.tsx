@@ -1,5 +1,5 @@
 "use client";
-import { type JSX, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, MotionProps } from "framer-motion";
 import { cn } from "@/lib/utils";
 
@@ -8,7 +8,7 @@ type TextScrambleProps = {
   duration?: number;
   speed?: number;
   characterSet?: string;
-  as?: React.ElementType;
+  as?: "span" | "p";
   className?: string;
   trigger?: boolean;
   onScrambleComplete?: () => void;
@@ -17,6 +17,11 @@ type TextScrambleProps = {
 
 const defaultChars =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+const MOTION_COMPONENTS = {
+  p: motion.p,
+  span: motion.span,
+} as const;
 
 export function TextScramble({
   children,
@@ -31,18 +36,13 @@ export function TextScramble({
   ...props
 }: TextScrambleProps) {
   const [displayText, setDisplayText] = useState(children);
-  const [isAnimating, setIsAnimating] = useState(false);
   const text = children;
 
   useEffect(() => {
     if (!trigger && !loop) return;
 
-    let interval: NodeJS.Timeout;
-    let startTime: number;
+    const startTime = Date.now();
     const length = text.length;
-
-    setIsAnimating(true);
-    startTime = Date.now();
 
     const animate = () => {
       const now = Date.now();
@@ -64,7 +64,6 @@ export function TextScramble({
 
       if (progress === 1) {
         setDisplayText(text);
-        setIsAnimating(false);
         onScrambleComplete?.();
         clearInterval(interval);
         return;
@@ -84,12 +83,12 @@ export function TextScramble({
       setDisplayText(nextText);
     };
 
-    interval = setInterval(animate, speed * 1000);
+    const interval = setInterval(animate, speed * 1000);
 
     return () => clearInterval(interval);
   }, [trigger, loop, text, duration, speed, characterSet, onScrambleComplete]);
 
-  const MotionComponent = motion.create(Component as any);
+  const MotionComponent = MOTION_COMPONENTS[Component];
 
   return (
     <MotionComponent className={cn(className)} {...props}>

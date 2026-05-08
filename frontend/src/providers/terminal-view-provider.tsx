@@ -45,22 +45,21 @@ export function TerminalViewProvider({ children }: { children: ReactNode }) {
   const viewParam = searchParams.get("view");
 
   // Initialize from URL or default
-  const [activeView, setActiveViewInternal] = useState<TerminalViewType>(
+  const [activeViewInternal, setActiveViewInternal] = useState<TerminalViewType>(
     isValidView(viewParam) ? viewParam : "terminal"
   );
 
   // Persisted settings across view switches
-  const [timeframe, setTimeframe] = useState("1H");
-  const [asset, setAsset] = useState("ES");
+  const [timeframe, setTimeframe] = useState(() => {
+    if (typeof window === "undefined") return "1H";
+    return window.localStorage.getItem("terminal-settings-timeframe") || "1H";
+  });
+  const [asset, setAsset] = useState(() => {
+    if (typeof window === "undefined") return "ES";
+    return window.localStorage.getItem("terminal-settings-asset") || "ES";
+  });
 
-  // Load from localStorage on mount
-  useEffect(() => {
-    const savedTimeframe = localStorage.getItem("terminal-settings-timeframe");
-    const savedAsset = localStorage.getItem("terminal-settings-asset");
-
-    if (savedTimeframe) setTimeframe(savedTimeframe);
-    if (savedAsset) setAsset(savedAsset);
-  }, []);
+  const activeView = isValidView(viewParam) ? viewParam : activeViewInternal;
 
   // Save to localStorage on changes
   useEffect(() => {
@@ -85,15 +84,6 @@ export function TerminalViewProvider({ children }: { children: ReactNode }) {
     },
     [router]
   );
-
-  // Sync state if URL changes from external source (back/forward buttons)
-  useEffect(() => {
-    // We use a functional update to check the current state without adding it to dependencies.
-    // This is the cleanest way to sync the URL to state without triggering flip-flops.
-    if (isValidView(viewParam)) {
-      setActiveViewInternal((current) => (current !== viewParam ? viewParam : current));
-    }
-  }, [viewParam]); // Only depend on viewParam to avoid state -> URL -> state bounce.
 
   const value = useMemo(
     () => ({

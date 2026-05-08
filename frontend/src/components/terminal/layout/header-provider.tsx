@@ -29,7 +29,11 @@ interface HeaderProviderProps {
 
 export function HeaderProvider({ children }: HeaderProviderProps) {
   const [navContent, setNavContentState] = useState<ReactNode>(null);
-  const [visibleRows, setVisibleRowsState] = useState<VisibleRows>(3);
+  const [visibleRows, setVisibleRowsState] = useState<VisibleRows>(() => {
+    if (typeof window === "undefined") return 3;
+    const stored = window.localStorage.getItem("terminal-visible-rows");
+    return stored === "4" ? 4 : 3;
+  });
 
   // Wrap in useCallback to maintain stable identity
   const setNavContent = useCallback((content: ReactNode) => {
@@ -38,13 +42,6 @@ export function HeaderProvider({ children }: HeaderProviderProps) {
 
   const setVisibleRows = useCallback((rows: VisibleRows) => {
     setVisibleRowsState(rows);
-  }, []);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("terminal-visible-rows");
-    if (stored === "3" || stored === "4") {
-      setVisibleRowsState(Number(stored) as VisibleRows);
-    }
   }, []);
 
   useEffect(() => {
