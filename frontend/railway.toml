@@ -1,9 +1,36 @@
-# Frontend Railway Configuration
+# Frontend Railway configuration
+#
+# Dashboard-only settings still required for this service:
+# - Source repo: dawi369/mk3
+# - Root directory: /frontend
+# - Production branch: main
+# - Public domain: swordfsh.app
+# - Railway config file path: /frontend/railway.toml
+#
+# Railway config-as-code is applied per deployment and overrides the
+# dashboard's Build and Deploy settings, but it does not mutate those
+# dashboard settings in place.
+
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 watchPatterns = ["src/**", "public/**", "package.json", "bun.lock", "Dockerfile", "next.config.ts"]
 
 [deploy]
+numReplicas = 1
 healthcheckPath = "/health"
+healthcheckTimeout = 300
+sleepApplication = false
+region = "us-east4-eqdc4a"
+overlapSeconds = 0
+drainingSeconds = 0
 restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+[deploy.multiRegionConfig.us-east4-eqdc4a]
+numReplicas = 1
+
+[deploy.limitOverride.containers]
+cpu = 8
+# 8 GiB
+memoryBytes = 8_589_934_592
