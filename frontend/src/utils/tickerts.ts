@@ -52,8 +52,9 @@ function groupBy(arr: TickerEntry[], codeFields: string[]): TickerGroup {
   const map: TickerGroup = {};
   for (const entry of arr) {
     for (const key of codeFields) {
-      if (entry[key]) {
-        map[entry[key]] = entry;
+      const code = entry[key];
+      if (typeof code === "string" && code.length > 0) {
+        map[code] = entry;
         break;
       }
     }

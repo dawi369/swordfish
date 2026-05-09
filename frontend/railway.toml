@@ -14,7 +14,19 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
-watchPatterns = ["src/**", "public/**", "package.json", "bun.lock", "Dockerfile", "next.config.ts"]
+watchPatterns = [
+  "src/**",
+  "public/**",
+  "tickers/**",
+  "package.json",
+  "bun.lock",
+  "Dockerfile",
+  "next.config.ts",
+  "tsconfig.json",
+  "postcss.config.mjs",
+  "components.json",
+  "railway.toml",
+]
 
 [deploy]
 numReplicas = 1
