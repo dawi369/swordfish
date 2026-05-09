@@ -115,10 +115,10 @@ export const TIER_CONFIG: Record<SubscriptionTier, TierInfo> = {
   pro: {
     id: "pro",
     name: "Pro",
-    price: 99,
-    priceDisplay: "$99",
+    price: 34.99,
+    priceDisplay: "$34.99",
     interval: "month",
-    description: "7-day free trial, then $99/mo",
+    description: "7-day free trial, then $34.99/mo",
     features: [
       { name: "Full access to the Swordfish platform", included: true },
       { name: "Personal support", included: true },
