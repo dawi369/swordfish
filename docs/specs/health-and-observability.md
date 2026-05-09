@@ -16,6 +16,7 @@ Make backend health and operator visibility precise enough to debug production w
 - `/admin/contracts/active`
 - `/admin/front-months`
 - `/admin/recovery/checkpoints`
+- `/admin/ops`
 - Railway build/deploy logs
 
 ## Target Signals
@@ -29,6 +30,8 @@ Make backend health and operator visibility precise enough to debug production w
 - front-month cache age and confidence
 - recovery checkpoint age
 - job last-run status and error
+- job schedule metadata and next run
+- hidden frontend operator console backed by server-side admin proxy routes
 
 ## Work Needed
 
@@ -37,4 +40,3 @@ Make backend health and operator visibility precise enough to debug production w
 - expose provider failure reasons safely
 - document operator thresholds
 - add runbook steps for stale data and provider outage
-

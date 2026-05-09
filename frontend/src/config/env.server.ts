@@ -29,6 +29,16 @@ export const MASSIVE_API_KEY = getOptionalEnv("MASSIVE_API_KEY", process.env.MAS
 export const MASSIVE_API_URL =
   getOptionalEnv("MASSIVE_API_URL", process.env.MASSIVE_API_URL) ?? "https://api.massive.com";
 export const SENTRY_DSN = getOptionalEnv("SENTRY_DSN", process.env.SENTRY_DSN);
+export const HUB_URL = getOptionalEnv("HUB_URL", process.env.HUB_URL) ??
+  getOptionalEnv("NEXT_PUBLIC_HUB_URL", process.env.NEXT_PUBLIC_HUB_URL);
+export const HUB_API_KEY = getOptionalEnv("HUB_API_KEY", process.env.HUB_API_KEY);
+export const ADMIN_PANEL_PASSWORD = getOptionalEnv(
+  "ADMIN_PANEL_PASSWORD",
+  process.env.ADMIN_PANEL_PASSWORD,
+) ?? (process.env.NODE_ENV === "production" ? undefined : "5565");
+export const ADMIN_PANEL_SESSION_SECRET =
+  getOptionalEnv("ADMIN_PANEL_SESSION_SECRET", process.env.ADMIN_PANEL_SESSION_SECRET) ??
+  ADMIN_PANEL_PASSWORD;
 export const WAITLIST_RATE_LIMIT_WINDOW_MS = Number(
   getOptionalEnv("WAITLIST_RATE_LIMIT_WINDOW_MS", process.env.WAITLIST_RATE_LIMIT_WINDOW_MS) ??
     "60000"

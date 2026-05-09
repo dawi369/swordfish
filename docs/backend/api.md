@@ -57,6 +57,7 @@ Admin routes require one of:
 | Endpoint | Method | Description |
 |---|---|---|
 | `/admin/health` | GET | detailed operator health and job state |
+| `/admin/ops` | GET | consolidated operator dashboard state for services, Redis freshness, jobs, and subscriptions |
 | `/admin/subscriptions` | GET | current upstream Massive subscriptions |
 | `/admin/recovery/checkpoints` | GET | recovery checkpoint state |
 | `/admin/recovery/backfill` | POST | manual provider backfill for subscribed symbols |
@@ -87,4 +88,3 @@ curl -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/health | jq
 curl -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/contracts/active/ES | jq
 curl -X POST -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/recovery/backfill | jq
 ```
-

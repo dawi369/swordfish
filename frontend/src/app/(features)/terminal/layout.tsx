@@ -10,6 +10,7 @@ import { HeaderProvider } from "@/components/terminal/layout/header-provider";
 import { TerminalHeader } from "@/components/terminal/layout/terminal-header";
 import { TerminalDock } from "@/components/terminal/layout/terminal-dock";
 import { TerminalViewProvider, useTerminalView } from "@/providers/terminal-view-provider";
+import { AdminPanel } from "@/components/terminal/admin/admin-panel";
 
 function TerminalLayoutContent({ children }: { children: React.ReactNode }) {
   const { activeView, setActiveView } = useTerminalView();
@@ -21,6 +22,7 @@ function TerminalLayoutContent({ children }: { children: React.ReactNode }) {
       {/* Spacer footer - half header height (h-14 / 2 = h-7) for dock separation */}
       <div className="h-7 shrink-0" />
       <Spotlight />
+      <AdminPanel />
       <TickerModal />
       <TerminalDock activeView={activeView} onSelect={setActiveView} />
     </div>

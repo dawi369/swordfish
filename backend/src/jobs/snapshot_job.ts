@@ -4,6 +4,7 @@ import {
   fetchTickerSnapshotContract,
   snapshotContractToSnapshotData,
 } from "@/utils/massive_snapshots.js";
+import { Sentry } from "@/utils/sentry.js";
 const REDIS_STATUS_KEY = "job:snapshot:status";
 
 interface SnapshotJobStatus {
@@ -108,6 +109,11 @@ export class SnapshotJob {
     } catch (err) {
       this.status.lastSuccess = false;
       this.status.lastError = err instanceof Error ? err.message : String(err);
+      Sentry.captureException(err, {
+        tags: {
+          job: "snapshot-refresh",
+        },
+      });
       await this.saveStatus();
       console.error("[SnapshotJob] Failed:", err);
     }
@@ -115,6 +121,18 @@ export class SnapshotJob {
 
   getStatus(): SnapshotJobStatus {
     return { ...this.status };
+  }
+
+  getSchedule() {
+    return {
+      id: "snapshot-refresh",
+      label: "Snapshot refresh",
+      cron: "5 2 * * *",
+      timezone: "America/New_York",
+      description: "Refreshes cached contract snapshots after daily Redis maintenance.",
+      nextRunTime: this.cronJob ? this.cronJob.nextDate().toMillis() : null,
+      scheduled: Boolean(this.cronJob),
+    };
   }
 
   /**

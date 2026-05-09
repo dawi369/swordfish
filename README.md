@@ -1,38 +1,88 @@
 # MK3
 
-Monorepo for the Swordfish frontend and futures-data backend.
+Futures terminal workbench.
 
-## Services
+MK3 is the current Swordfish build: a fast frontend, a Bun market-data hub,
+Redis as the hot source of truth, and enough backend discipline to make the
+thing debuggable when real data starts acting weird.
 
-- `frontend/` — Next.js app
-- `backend/` — Bun hub API + WebSocket service
-- `docker-compose.yml` — local Redis for development
+The goal is not another pretty chart toy. The direction is:
 
-## Docs
+- futures-first, not equities with a futures skin
+- live bars, sessions, snapshots, active contracts, and front-month logic
+- Redis for low-latency product state
+- explicit jobs and recovery instead of mystery cron behavior
+- operator visibility built into the app, not hidden in vibes and logs
+- Sentry for breakage, PostHog for product usage, admin console for system state
 
-Start with the docs index:
+## Shape
 
-- [docs/README.md](/Users/dawi/dev/mk3/docs/README.md)
+```text
+mk3/
+|-- frontend/        # Next.js terminal UI
+|-- backend/         # Bun hub API, WebSocket service, jobs
+|-- docs/            # architecture, backend contracts, runbooks
+`-- docker-compose.yml
+```
 
-Core backend/data-layer docs:
+## Runtime
 
-- [docs/architecture/system-context.md](/Users/dawi/dev/mk3/docs/architecture/system-context.md)
-- [docs/architecture/data-flow.md](/Users/dawi/dev/mk3/docs/architecture/data-flow.md)
-- [docs/backend/data-layer.md](/Users/dawi/dev/mk3/docs/backend/data-layer.md)
-- [docs/backend/redis-keyspace.md](/Users/dawi/dev/mk3/docs/backend/redis-keyspace.md)
-- [docs/specs/backend-data-layer-v1.md](/Users/dawi/dev/mk3/docs/specs/backend-data-layer-v1.md)
+- `frontend/` serves the Swordfish terminal.
+- `backend/` connects to Massive, normalizes market data, writes Redis, and exposes REST/WebSocket APIs.
+- `Redis` is the beta hot path. It holds latest bars, time-series data, sessions, snapshots, active contracts, recovery checkpoints, and job state.
+- `Railway` is the current deployment target.
 
-## Deploying
+## Local
 
-Railway is currently the intended hosting target for both services.
+```bash
+docker compose up -d redis
 
-- Deployment topology: [docs/architecture/deployment-topology.md](/Users/dawi/dev/mk3/docs/architecture/deployment-topology.md)
-- Railway runbook: [docs/runbooks/railway-deploy.md](/Users/dawi/dev/mk3/docs/runbooks/railway-deploy.md)
-- Failed build debugging: [docs/runbooks/failed-build-debugging.md](/Users/dawi/dev/mk3/docs/runbooks/failed-build-debugging.md)
-- Frontend env template: [frontend/.env.example](/Users/dawi/dev/mk3/frontend/.env.example)
-- Backend env template: [backend/.env.example](/Users/dawi/dev/mk3/backend/.env.example)
+cd backend
+bun run dev
 
-Service-local Railway config already exists in:
+cd ../frontend
+bun run dev
+```
 
-- [frontend/railway.toml](/Users/dawi/dev/mk3/frontend/railway.toml)
-- [backend/railway.toml](/Users/dawi/dev/mk3/backend/railway.toml)
+Frontend runs on `http://localhost:3010`.
+Backend defaults to `http://localhost:3001`.
+
+## Operator Console
+
+In the terminal UI:
+
+1. Press `Cmd+K`
+2. Type `admin`
+3. Unlock with the configured admin password
+
+The panel shows backend health, Redis freshness, scheduled jobs, subscriptions,
+and safe manual refresh actions. In local dev the fallback password is `5565`.
+Production should use `ADMIN_PANEL_PASSWORD` and `ADMIN_PANEL_SESSION_SECRET`.
+
+## Useful Commands
+
+```bash
+cd backend
+bun run test:unit
+
+cd ../frontend
+bun run test
+bunx tsc --noEmit --skipLibCheck
+```
+
+## Source Of Truth
+
+Start here when changing backend/data behavior:
+
+- [docs/README.md](./docs/README.md)
+- [docs/architecture/data-flow.md](./docs/architecture/data-flow.md)
+- [docs/backend/data-layer.md](./docs/backend/data-layer.md)
+- [docs/backend/redis-keyspace.md](./docs/backend/redis-keyspace.md)
+- [docs/specs/health-and-observability.md](./docs/specs/health-and-observability.md)
+- [docs/runbooks/railway-deploy.md](./docs/runbooks/railway-deploy.md)
+
+## Status
+
+Frontend is well underway. Backend is moving from "working beta pipe" toward
+production-grade market-data infrastructure: clearer contracts, better recovery,
+admin visibility, and fewer places where future us has to guess.

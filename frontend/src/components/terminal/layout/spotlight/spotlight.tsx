@@ -11,7 +11,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Terminal, Activity, Sparkles, Settings, FlaskConical } from "lucide-react";
+import { Terminal, Activity, Sparkles, Settings, FlaskConical, Shield } from "lucide-react";
 import {
   useSpotlight,
   SpotlightCommand,
@@ -21,6 +21,7 @@ import { type TickerSearchResult, MAX_SPREAD_LEGS } from "@/types/ticker.types";
 import type { Bar } from "@/types/common.types";
 import { getChangeMetrics, resolveLastPrice } from "@/lib/ticker-snapshot";
 import type { SnapshotData, SessionData } from "@/types/redis.types";
+import { ANALYTICS_EVENTS, captureAnalyticsEvent } from "@/lib/analytics";
 
 function summarizeVolume(bars?: Bar[]): number {
   if (!bars || bars.length === 0) return 0;
@@ -173,6 +174,7 @@ export function Spotlight() {
     () => searchTickers(query, entities, series, snapshots, sessions),
     [query, entities, series, snapshots, sessions]
   );
+  const showAdminCommand = query.trim().toLowerCase() === "admin";
 
   // Keyboard shortcut handler - Ctrl+K or Cmd+K
   useEffect(() => {
@@ -252,6 +254,13 @@ export function Spotlight() {
     setQuery("");
   };
 
+  const handleAdminSelect = () => {
+    captureAnalyticsEvent(ANALYTICS_EVENTS.adminCommandEntered);
+    window.dispatchEvent(new CustomEvent("mk3:open-admin-panel"));
+    close();
+    setQuery("");
+  };
+
   return (
     <CommandDialog
       open={isOpen}
@@ -302,6 +311,19 @@ export function Spotlight() {
                  </div>
                </CommandItem>
              ))}
+          </CommandGroup>
+        )}
+
+        {showAdminCommand && (
+          <CommandGroup heading="Hidden">
+            <CommandItem
+              onSelect={handleAdminSelect}
+              className="cursor-pointer"
+              value="admin operator console"
+            >
+              <Shield className="size-4 text-cyan-400" />
+              <span>Open operator console</span>
+            </CommandItem>
           </CommandGroup>
         )}
 
