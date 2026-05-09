@@ -58,6 +58,8 @@ Admin routes require one of:
 |---|---|---|
 | `/admin/health` | GET | detailed operator health and job state |
 | `/admin/ops` | GET | consolidated operator dashboard state for services, Redis freshness, jobs, and subscriptions |
+| `/admin/commands` | GET | list allowlisted read-only operator diagnostics |
+| `/admin/commands/:id/run` | POST | run one allowlisted read-only diagnostic and persist a small run record |
 | `/admin/subscriptions` | GET | current upstream Massive subscriptions |
 | `/admin/recovery/checkpoints` | GET | recovery checkpoint state |
 | `/admin/recovery/backfill` | POST | manual provider backfill for subscribed symbols |

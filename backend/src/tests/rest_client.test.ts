@@ -157,6 +157,62 @@ describe("REST request handler", () => {
     expect(payload.subscriptions.totalSymbols).toBe(2);
   });
 
+  test("lists and runs allowlisted admin diagnostic commands", async () => {
+    setMassiveClientForTesting({
+      isConnected: () => true,
+      getSubscriptions: () => [
+        { ev: "A", assetClass: "us_indices", symbols: ["ESH6", "NQH6"] },
+      ],
+    } as any);
+
+    spyOn(redisStore, "ping").mockResolvedValue("PONG");
+    spyOn(redisStore, "getStats").mockResolvedValue({
+      date: "2026-03-25",
+      barCount: 10,
+      symbolCount: 2,
+    } as any);
+    spyOn(timescaleStore, "ping").mockResolvedValue(true);
+    spyOn(redisStore, "getAllLatestArray").mockResolvedValue([]);
+    spyOn(redisStore, "getAllSnapshots").mockResolvedValue({});
+    spyOn(redisStore, "getAllActiveContracts").mockResolvedValue({});
+    spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({});
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue(["ESH6", "NQH6"]);
+    spyOn(redisStore.redis, "multi").mockReturnValue({
+      lpush: () => ({
+        ltrim: () => ({
+          exec: async () => [],
+        }),
+      }),
+    } as any);
+
+    const listResponse = await handleRequest(
+      "GET",
+      "/admin/commands",
+      createRequest("/admin/commands", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const listPayload = (await listResponse.json()) as any;
+
+    expect(listResponse.status).toBe(200);
+    expect(listPayload.commands.some((command: any) => command.id === "health")).toBe(true);
+
+    const runResponse = await handleRequest(
+      "POST",
+      "/admin/commands/health/run",
+      createRequest("/admin/commands/health/run", {
+        method: "POST",
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const runPayload = (await runResponse.json()) as any;
+
+    expect(runResponse.status).toBe(200);
+    expect(runPayload.command.id).toBe("health");
+    expect(runPayload.lines.length).toBeGreaterThan(0);
+    expect(runPayload.output.status).toBe("warming");
+  });
+
   test("returns recovery checkpoints when authorized", async () => {
     spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({
       "1m:ESH6": {

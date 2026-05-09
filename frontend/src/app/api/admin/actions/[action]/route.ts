@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ADMIN_SESSION_COOKIE, isValidAdminSession } from "@/lib/server/admin-session";
+import { isAuthorizedAdminRequest } from "@/lib/server/admin-session";
 import { proxyAdminRequest } from "@/lib/server/admin-proxy";
 
 const ACTION_PATHS: Record<string, string> = {
@@ -13,8 +13,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ action: string }> },
 ) {
-  const cookie = request.cookies.get(ADMIN_SESSION_COOKIE)?.value;
-  if (!isValidAdminSession(cookie)) {
+  if (!isAuthorizedAdminRequest(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

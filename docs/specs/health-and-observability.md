@@ -17,6 +17,8 @@ Make backend health and operator visibility precise enough to debug production w
 - `/admin/front-months`
 - `/admin/recovery/checkpoints`
 - `/admin/ops`
+- `/admin/commands`
+- `/admin/commands/:id/run`
 - Railway build/deploy logs
 
 ## Target Signals
@@ -32,6 +34,7 @@ Make backend health and operator visibility precise enough to debug production w
 - job last-run status and error
 - job schedule metadata and next run
 - hidden frontend operator console backed by server-side admin proxy routes
+- allowlisted read-only diagnostics console with structured output
 
 ## Work Needed
 

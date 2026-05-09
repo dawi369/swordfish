@@ -87,6 +87,14 @@ type AdminJobKey =
   | "snapshotRefresh"
   | "frontMonthRefresh";
 
+interface AdminCommandDefinition {
+  id: string;
+  label: string;
+  description: string;
+}
+
+type AdminOpsStatus = "ok" | "warming" | "degraded";
+
 interface RateLimitState {
   count: number;
   resetAt: number;
@@ -101,6 +109,41 @@ interface RateLimitDecision {
 }
 
 const rateLimitBuckets = new Map<string, RateLimitState>();
+
+const ADMIN_COMMAND_RUNS_KEY = "admin:command:runs";
+const ADMIN_COMMAND_RUN_LIMIT = 50;
+const ADMIN_COMMANDS: AdminCommandDefinition[] = [
+  {
+    id: "health",
+    label: "Health",
+    description: "Service connectivity, Redis stats, and job health summary.",
+  },
+  {
+    id: "redis-summary",
+    label: "Redis summary",
+    description: "Hot-store counts and cache freshness without dumping raw keys.",
+  },
+  {
+    id: "jobs-status",
+    label: "Jobs status",
+    description: "Cron metadata, last run state, and last errors.",
+  },
+  {
+    id: "subscriptions",
+    label: "Subscriptions",
+    description: "Current upstream and persisted subscription counts.",
+  },
+  {
+    id: "front-months-summary",
+    label: "Front months",
+    description: "Front-month cache status by product.",
+  },
+  {
+    id: "recovery-checkpoints",
+    label: "Recovery checkpoints",
+    description: "Recovery checkpoint count and newest checkpoint age.",
+  },
+];
 
 function maxTimestamp(values: Array<number | null | undefined>): number | null {
   const timestamps = values.filter(
@@ -118,6 +161,35 @@ function minTimestamp(values: Array<number | null | undefined>): number | null {
 
 function ageMs(timestamp: number | null, now: number): number | null {
   return timestamp ? Math.max(0, now - timestamp) : null;
+}
+
+function summarizeAges(timestamps: Array<number | null | undefined>, now: number) {
+  const ages = timestamps
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    .map((timestamp) => Math.max(0, now - timestamp))
+    .sort((left, right) => left - right);
+
+  if (ages.length === 0) {
+    return {
+      count: 0,
+      minAgeMs: null,
+      medianAgeMs: null,
+      maxAgeMs: null,
+    };
+  }
+
+  return {
+    count: ages.length,
+    minAgeMs: ages[0] ?? null,
+    medianAgeMs: ages[Math.floor(ages.length / 2)] ?? null,
+    maxAgeMs: ages[ages.length - 1] ?? null,
+  };
+}
+
+function classifyJob(job: { status: { lastRunTime: number | null; lastSuccess: boolean; lastError: string | null } }) {
+  if (!job.status.lastRunTime) return "not_run";
+  if (job.status.lastSuccess) return "ok";
+  return "failed";
 }
 
 function buildJobState() {
@@ -139,6 +211,281 @@ function buildJobState() {
       status: frontMonthJob.getStatus(),
     },
   } satisfies Record<AdminJobKey, unknown>;
+}
+
+async function buildAdminOpsPayload() {
+  const now = Date.now();
+  let redisOk = false;
+  let timescaleOk = false;
+  const timescaleEnabled = timescaleStore.isEnabled;
+
+  try {
+    redisOk = (await redisStore.ping()) === "PONG";
+  } catch {
+    redisOk = false;
+  }
+
+  if (timescaleEnabled) {
+    try {
+      timescaleOk = await timescaleStore.ping();
+    } catch {
+      timescaleOk = false;
+    }
+  }
+
+  const [
+    redisStats,
+    latestBars,
+    snapshots,
+    activeContracts,
+    recoveryCheckpoints,
+    subscribedSymbols,
+  ] = await Promise.all([
+    redisStore.getStats(),
+    redisStore.getAllLatestArray(),
+    redisStore.getAllSnapshots(),
+    redisStore.getAllActiveContracts(),
+    redisStore.getAllRecoveryCheckpoints(),
+    redisStore.getSubscribedSymbols(),
+  ]);
+
+  const snapshotTimestamps = Object.values(snapshots).map(
+    (snapshot) => snapshot.timestamp,
+  );
+  const activeContractTimestamps = Object.values(activeContracts).map(
+    (contractSet) => contractSet.updatedAt,
+  );
+  const recoveryTimestamps = Object.values(recoveryCheckpoints).map(
+    (checkpoint) => checkpoint.updatedAt,
+  );
+  const latestBarTimestamps = latestBars.map((bar) => bar.startTime);
+  const newestBarTime = maxTimestamp(latestBarTimestamps);
+  const oldestBarTime = minTimestamp(latestBarTimestamps);
+  const latestSnapshotTime = maxTimestamp(snapshotTimestamps);
+  const oldestSnapshotTime = minTimestamp(snapshotTimestamps);
+  const latestActiveContractTime = maxTimestamp(activeContractTimestamps);
+  const latestRecoveryCheckpointTime = maxTimestamp(recoveryTimestamps);
+  const wsConnected = massiveClient?.isConnected() || false;
+  const servicesHealthy =
+    redisOk && wsConnected && (!timescaleEnabled || timescaleOk);
+  const jobs = buildJobState();
+  const jobStates = Object.fromEntries(
+    Object.entries(jobs).map(([key, job]) => [
+      key,
+      classifyJob(
+        job as {
+          status: {
+            lastRunTime: number | null;
+            lastSuccess: boolean;
+            lastError: string | null;
+          };
+        },
+      ),
+    ]),
+  );
+  const failedJobs = Object.entries(jobStates)
+    .filter(([, state]) => state === "failed")
+    .map(([key]) => key);
+  const pendingJobs = Object.entries(jobStates)
+    .filter(([, state]) => state === "not_run")
+    .map(([key]) => key);
+  const status: AdminOpsStatus = !servicesHealthy
+    ? "degraded"
+    : failedJobs.length > 0
+      ? "degraded"
+      : pendingJobs.length > 0
+        ? "warming"
+        : "ok";
+
+  return {
+    status,
+    timestamp: now,
+    services: {
+      redis: redisOk ? "connected" : "disconnected",
+      timescaledb: timescaleEnabled
+        ? timescaleOk
+          ? "connected"
+          : "disconnected"
+        : "disabled",
+      massiveWs: wsConnected ? "connected" : "disconnected",
+    },
+    redis: {
+      ...redisStats,
+      latestBarCount: latestBars.length,
+      snapshotCount: Object.keys(snapshots).length,
+      activeContractProductCount: Object.keys(activeContracts).length,
+      recoveryCheckpointCount: Object.keys(recoveryCheckpoints).length,
+      subscribedSymbolCount: subscribedSymbols.length,
+      streamLength: redisStats.streamLength,
+      dbSize: redisStats.dbSize,
+      usedMemoryBytes: redisStats.usedMemoryBytes,
+      indexCounts: redisStats.indexCounts,
+    },
+    freshness: {
+      latestBars: {
+        newestTimestamp: newestBarTime,
+        newestAgeMs: ageMs(newestBarTime, now),
+        oldestTimestamp: oldestBarTime,
+        oldestAgeMs: ageMs(oldestBarTime, now),
+        ageSummary: summarizeAges(latestBarTimestamps, now),
+      },
+      snapshots: {
+        newestTimestamp: latestSnapshotTime,
+        newestAgeMs: ageMs(latestSnapshotTime, now),
+        oldestTimestamp: oldestSnapshotTime,
+        oldestAgeMs: ageMs(oldestSnapshotTime, now),
+        ageSummary: summarizeAges(snapshotTimestamps, now),
+      },
+      activeContracts: {
+        newestTimestamp: latestActiveContractTime,
+        newestAgeMs: ageMs(latestActiveContractTime, now),
+        ageSummary: summarizeAges(activeContractTimestamps, now),
+      },
+      recoveryCheckpoints: {
+        newestTimestamp: latestRecoveryCheckpointTime,
+        newestAgeMs: ageMs(latestRecoveryCheckpointTime, now),
+        ageSummary: summarizeAges(recoveryTimestamps, now),
+      },
+    },
+    jobs,
+    jobSummary: {
+      states: jobStates,
+      failedJobs,
+      pendingJobs,
+      totalJobs: Object.keys(jobs).length,
+      successfulJobs: Object.values(jobStates).filter((state) => state === "ok").length,
+    },
+    subscriptions: {
+      upstreamCount: massiveClient?.getSubscriptions().length ?? 0,
+      totalSymbols:
+        massiveClient
+          ?.getSubscriptions()
+          .reduce((sum, sub) => sum + sub.symbols.length, 0) ?? 0,
+      persistedSymbols: subscribedSymbols,
+    },
+    frontMonths: frontMonthJob.getCache(),
+  };
+}
+
+async function persistAdminCommandRun(run: unknown): Promise<void> {
+  try {
+    await redisStore.redis
+      .multi()
+      .lpush(ADMIN_COMMAND_RUNS_KEY, JSON.stringify(run))
+      .ltrim(ADMIN_COMMAND_RUNS_KEY, 0, ADMIN_COMMAND_RUN_LIMIT - 1)
+      .exec();
+  } catch (err) {
+    logger.warn("Failed to persist admin command run", { error: String(err) });
+  }
+}
+
+async function runAdminCommand(commandId: string) {
+  const definition = ADMIN_COMMANDS.find((command) => command.id === commandId);
+  if (!definition) {
+    return null;
+  }
+
+  const startedAt = Date.now();
+  const ops = await buildAdminOpsPayload();
+  let output: unknown;
+  let lines: string[];
+
+  switch (commandId) {
+    case "health":
+      output = {
+        status: ops.status,
+        services: ops.services,
+        redis: {
+          date: ops.redis.date,
+          barCount: ops.redis.barCount,
+          symbolCount: ops.redis.symbolCount,
+        },
+        failedJobs: Object.values(ops.jobs)
+          .filter((job) => !(job as { status: { lastSuccess: boolean } }).status.lastSuccess)
+          .map((job) => (job as { label: string }).label),
+      };
+      lines = [
+        `status=${ops.status}`,
+        `redis=${ops.services.redis}`,
+        `massiveWs=${ops.services.massiveWs}`,
+        `symbols=${ops.redis.symbolCount}`,
+      ];
+      break;
+    case "redis-summary":
+      output = ops.redis;
+      lines = [
+        `date=${ops.redis.date}`,
+        `latestBars=${ops.redis.latestBarCount}`,
+        `snapshots=${ops.redis.snapshotCount}`,
+        `activeContractProducts=${ops.redis.activeContractProductCount}`,
+        `recoveryCheckpoints=${ops.redis.recoveryCheckpointCount}`,
+      ];
+      break;
+    case "jobs-status":
+      output = ops.jobs;
+      lines = Object.values(ops.jobs).map((job) => {
+        const typedJob = job as {
+          label: string;
+          scheduled: boolean;
+          status: { lastSuccess: boolean; totalRuns: number; lastError: string | null };
+        };
+        return `${typedJob.label}: success=${typedJob.status.lastSuccess} runs=${typedJob.status.totalRuns} scheduled=${typedJob.scheduled} error=${typedJob.status.lastError ?? "none"}`;
+      });
+      break;
+    case "subscriptions":
+      output = ops.subscriptions;
+      lines = [
+        `upstreamSubscriptions=${ops.subscriptions.upstreamCount}`,
+        `upstreamSymbols=${ops.subscriptions.totalSymbols}`,
+        `persistedSymbols=${ops.subscriptions.persistedSymbols.length}`,
+      ];
+      break;
+    case "front-months-summary": {
+      const products = ops.frontMonths?.products ?? {};
+      output = {
+        lastUpdated: ops.frontMonths?.lastUpdated ?? null,
+        productCount: Object.keys(products).length,
+        products,
+      };
+      lines = [
+        `lastUpdated=${ops.frontMonths?.lastUpdated ?? "never"}`,
+        `products=${Object.keys(products).length}`,
+        ...Object.entries(products)
+          .slice(0, 20)
+          .map(([code, value]) => {
+            const frontMonth = (value as { frontMonth?: string }).frontMonth ?? "unknown";
+            return `${code}=${frontMonth}`;
+          }),
+      ];
+      break;
+    }
+    case "recovery-checkpoints":
+      output = ops.freshness.recoveryCheckpoints;
+      lines = [
+        `checkpoints=${ops.redis.recoveryCheckpointCount}`,
+        `newestTimestamp=${ops.freshness.recoveryCheckpoints.newestTimestamp ?? "never"}`,
+        `newestAgeMs=${ops.freshness.recoveryCheckpoints.newestAgeMs ?? "unknown"}`,
+      ];
+      break;
+    default:
+      output = {};
+      lines = [];
+  }
+
+  const completedAt = Date.now();
+  const run = {
+    id: `${commandId}:${completedAt}`,
+    command: definition,
+    status: "success",
+    startedAt,
+    completedAt,
+    durationMs: completedAt - startedAt,
+    lines,
+    output,
+  };
+
+  await persistAdminCommandRun(run);
+  return run;
 }
 
 function parseTimeframe(value: string | null, fallback: string): string {
@@ -637,118 +984,7 @@ export async function handleRequest(
 
     if (method === "GET" && path === "/admin/ops") {
       try {
-        const now = Date.now();
-        let redisOk = false;
-        let timescaleOk = false;
-        const timescaleEnabled = timescaleStore.isEnabled;
-
-        try {
-          redisOk = (await redisStore.ping()) === "PONG";
-        } catch {
-          redisOk = false;
-        }
-
-        if (timescaleEnabled) {
-          try {
-            timescaleOk = await timescaleStore.ping();
-          } catch {
-            timescaleOk = false;
-          }
-        }
-
-        const [
-          redisStats,
-          latestBars,
-          snapshots,
-          activeContracts,
-          recoveryCheckpoints,
-          subscribedSymbols,
-        ] = await Promise.all([
-          redisStore.getStats(),
-          redisStore.getAllLatestArray(),
-          redisStore.getAllSnapshots(),
-          redisStore.getAllActiveContracts(),
-          redisStore.getAllRecoveryCheckpoints(),
-          redisStore.getSubscribedSymbols(),
-        ]);
-
-        const snapshotTimestamps = Object.values(snapshots).map(
-          (snapshot) => snapshot.timestamp,
-        );
-        const activeContractTimestamps = Object.values(activeContracts).map(
-          (contractSet) => contractSet.updatedAt,
-        );
-        const recoveryTimestamps = Object.values(recoveryCheckpoints).map(
-          (checkpoint) => checkpoint.updatedAt,
-        );
-        const latestBarTimestamps = latestBars.map((bar) => bar.startTime);
-        const newestBarTime = maxTimestamp(latestBarTimestamps);
-        const oldestBarTime = minTimestamp(latestBarTimestamps);
-        const latestSnapshotTime = maxTimestamp(snapshotTimestamps);
-        const oldestSnapshotTime = minTimestamp(snapshotTimestamps);
-        const latestActiveContractTime = maxTimestamp(activeContractTimestamps);
-        const latestRecoveryCheckpointTime = maxTimestamp(recoveryTimestamps);
-        const wsConnected = massiveClient?.isConnected() || false;
-        const servicesHealthy =
-          redisOk && wsConnected && (!timescaleEnabled || timescaleOk);
-        const jobs = buildJobState();
-        const failingJobs = Object.entries(jobs)
-          .filter(([, job]) => !(job as { status: { lastSuccess: boolean } }).status.lastSuccess)
-          .map(([key]) => key);
-
-        return respond({
-          status: servicesHealthy && failingJobs.length === 0 ? "ok" : "degraded",
-          timestamp: now,
-          services: {
-            redis: redisOk ? "connected" : "disconnected",
-            timescaledb: timescaleEnabled
-              ? timescaleOk
-                ? "connected"
-                : "disconnected"
-              : "disabled",
-            massiveWs: wsConnected ? "connected" : "disconnected",
-          },
-          redis: {
-            ...redisStats,
-            latestBarCount: latestBars.length,
-            snapshotCount: Object.keys(snapshots).length,
-            activeContractProductCount: Object.keys(activeContracts).length,
-            recoveryCheckpointCount: Object.keys(recoveryCheckpoints).length,
-            subscribedSymbolCount: subscribedSymbols.length,
-          },
-          freshness: {
-            latestBars: {
-              newestTimestamp: newestBarTime,
-              newestAgeMs: ageMs(newestBarTime, now),
-              oldestTimestamp: oldestBarTime,
-              oldestAgeMs: ageMs(oldestBarTime, now),
-            },
-            snapshots: {
-              newestTimestamp: latestSnapshotTime,
-              newestAgeMs: ageMs(latestSnapshotTime, now),
-              oldestTimestamp: oldestSnapshotTime,
-              oldestAgeMs: ageMs(oldestSnapshotTime, now),
-            },
-            activeContracts: {
-              newestTimestamp: latestActiveContractTime,
-              newestAgeMs: ageMs(latestActiveContractTime, now),
-            },
-            recoveryCheckpoints: {
-              newestTimestamp: latestRecoveryCheckpointTime,
-              newestAgeMs: ageMs(latestRecoveryCheckpointTime, now),
-            },
-          },
-          jobs,
-          subscriptions: {
-            upstreamCount: massiveClient?.getSubscriptions().length ?? 0,
-            totalSymbols:
-              massiveClient
-                ?.getSubscriptions()
-                .reduce((sum, sub) => sum + sub.symbols.length, 0) ?? 0,
-            persistedSymbols: subscribedSymbols,
-          },
-          frontMonths: frontMonthJob.getCache(),
-        });
+        return respond(await buildAdminOpsPayload());
       } catch (err) {
         Sentry.captureException(err, {
           tags: {
@@ -757,6 +993,28 @@ export async function handleRequest(
         });
         throw err;
       }
+    }
+
+    if (method === "GET" && path === "/admin/commands") {
+      return respond({
+        commands: ADMIN_COMMANDS,
+        count: ADMIN_COMMANDS.length,
+      });
+    }
+
+    const commandRunMatch = path.match(/^\/admin\/commands\/([^\/]+)\/run$/);
+    if (method === "POST" && commandRunMatch) {
+      const commandId = commandRunMatch[1];
+      if (!commandId) {
+        return fail("Invalid command id", 400);
+      }
+
+      const run = await runAdminCommand(commandId);
+      if (!run) {
+        return fail("Unknown admin command", 404);
+      }
+
+      return respond(run);
     }
 
     if (method === "GET" && path === "/admin/front-months") {

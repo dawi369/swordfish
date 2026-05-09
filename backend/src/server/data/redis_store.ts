@@ -1041,16 +1041,46 @@ class RedisStore {
     date: string;
     barCount: number;
     symbolCount: number;
+    streamLength: number;
+    dbSize: number;
+    usedMemoryBytes: number | null;
+    indexCounts: {
+      snapshots: number;
+      activeContracts: number;
+      recoveryCheckpoints: number;
+    };
   }> {
-    const [date, count, symbolCount] = await Promise.all([
-      this.redis.get(KEYS.META_DATE),
-      this.redis.get(KEYS.META_COUNT),
-      this.redis.hlen(KEYS.LATEST_HASH),
-    ]);
+    const [date, count, symbolCount, streamLength, dbSize, memoryInfo, indexCounts] =
+      await Promise.all([
+        this.redis.get(KEYS.META_DATE),
+        this.redis.get(KEYS.META_COUNT),
+        this.redis.hlen(KEYS.LATEST_HASH),
+        this.redis.xlen(KEYS.STREAM).catch(() => 0),
+        this.redis.dbsize().catch(() => 0),
+        this.redis.info("memory").catch(() => ""),
+        Promise.all([
+          this.redis.scard(KEYS.SNAPSHOTS_INDEX).catch(() => 0),
+          this.redis.scard(KEYS.ACTIVE_CONTRACTS_INDEX).catch(() => 0),
+          this.redis.scard(KEYS.RECOVERY_CHECKPOINTS_INDEX).catch(() => 0),
+        ]),
+      ]);
+    const usedMemoryMatch = memoryInfo.match(/^used_memory:(\d+)/m);
+    const usedMemoryBytes = usedMemoryMatch?.[1]
+      ? parseInt(usedMemoryMatch[1], 10)
+      : null;
+
     return {
       date: date || "unknown",
       barCount: parseInt(count || "0"),
       symbolCount,
+      streamLength,
+      dbSize,
+      usedMemoryBytes,
+      indexCounts: {
+        snapshots: indexCounts[0],
+        activeContracts: indexCounts[1],
+        recoveryCheckpoints: indexCounts[2],
+      },
     };
   }
 
