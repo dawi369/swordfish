@@ -2,7 +2,16 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
-watchPatterns = ["src/**", "package.json", "bun.lock", "Dockerfile", "tsconfig.json"]
+watchPatterns = [
+  "src/**",
+  "tickers/**",
+  "package.json",
+  "bun.lock",
+  "Dockerfile",
+  "tsconfig.json",
+  "bunfig.toml",
+  "railway.toml",
+]
 
 [deploy]
 healthcheckPath = "/health"
