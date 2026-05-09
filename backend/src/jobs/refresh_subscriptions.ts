@@ -4,6 +4,7 @@ import type { MassiveWSClient } from "@/server/api/massive/ws_client.js";
 import type { MassiveAssetClass, MassiveWsRequest } from "@/types/massive.types.js";
 import type { RefreshJobStatus, RefreshDetails } from "@/types/common.types.js";
 import { scheduleBuilder } from "@/utils/cbs/schedule_cb.js";
+import { Sentry } from "@/utils/sentry.js";
 
 class MonthlySubscriptionJob {
   private cronJob: CronJob | null = null;
@@ -165,6 +166,16 @@ class MonthlySubscriptionJob {
         .join("; ");
       this.status.lastError = errors;
       this.status.lastSuccess = anySuccess; // Partial success if at least one succeeded
+      Sentry.captureMessage("Subscription refresh completed with failures", {
+        level: "warning",
+        tags: {
+          job: "subscription-refresh",
+        },
+        extra: {
+          errors,
+          results,
+        },
+      });
       console.log(`⚠️  Refresh completed with failures: ${errors}`);
     } else {
       this.status.lastError = null;
@@ -191,6 +202,18 @@ class MonthlySubscriptionJob {
 
   getStatus(): RefreshJobStatus {
     return { ...this.status };
+  }
+
+  getSchedule() {
+    return {
+      id: "subscription-refresh",
+      label: "Subscription refresh",
+      cron: "5 0 1 * *",
+      timezone: "America/New_York",
+      description: "Rebuilds upstream Massive subscriptions from active contracts.",
+      nextRunTime: this.cronJob ? this.cronJob.nextDate().toMillis() : null,
+      scheduled: Boolean(this.cronJob),
+    };
   }
 
   schedule(wsClient: MassiveWSClient): void {

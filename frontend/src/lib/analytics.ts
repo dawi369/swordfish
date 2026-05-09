@@ -11,6 +11,11 @@ export const ANALYTICS_EVENTS = {
   loginOAuthStarted: "login_oauth_started",
   pricingCtaClicked: "pricing_cta_clicked",
   featureRequestSubmitted: "feature_request_submitted",
+  adminCommandEntered: "admin_command_entered",
+  adminAuthSucceeded: "admin_auth_succeeded",
+  adminAuthFailed: "admin_auth_failed",
+  adminPanelOpened: "admin_panel_opened",
+  adminActionTriggered: "admin_action_triggered",
 } as const;
 
 export function captureAnalyticsEvent(

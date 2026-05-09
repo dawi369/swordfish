@@ -11,6 +11,7 @@ import { resolveFrontMonth } from "@/utils/front_month_resolver.js";
 import { buildGeneratedContracts } from "@/utils/contracts_calendar.js";
 import type { MassiveAssetClass } from "@/types/massive.types.js";
 import type { ActiveContract } from "@/types/contract.types.js";
+import { Sentry } from "@/utils/sentry.js";
 
 const REDIS_CACHE_KEY = "cache:front-months";
 const REDIS_STATUS_KEY = "job:front-months:status";
@@ -159,6 +160,11 @@ export class FrontMonthJob {
     } catch (err) {
       this.status.lastSuccess = false;
       this.status.lastError = err instanceof Error ? err.message : String(err);
+      Sentry.captureException(err, {
+        tags: {
+          job: "front-month-refresh",
+        },
+      });
       await this.saveStatus();
       console.error("[FrontMonthJob] Failed:", err);
     }
@@ -170,6 +176,18 @@ export class FrontMonthJob {
 
   getCache(): FrontMonthCache | null {
     return this.cache;
+  }
+
+  getSchedule() {
+    return {
+      id: "front-month-refresh",
+      label: "Front month refresh",
+      cron: "0 3 * * *",
+      timezone: "America/New_York",
+      description: "Refreshes active contracts and front-month ranking.",
+      nextRunTime: this.cronJob ? this.cronJob.nextDate().toMillis() : null,
+      scheduled: Boolean(this.cronJob),
+    };
   }
 
   schedule(): void {

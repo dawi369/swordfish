@@ -95,6 +95,68 @@ describe("REST request handler", () => {
     expect(payload.symbols).toEqual(["ESH6", "NQH6"]);
   });
 
+  test("returns consolidated admin ops status when authorized", async () => {
+    setMassiveClientForTesting({
+      isConnected: () => true,
+      getSubscriptions: () => [
+        { ev: "A", assetClass: "us_indices", symbols: ["ESH6", "NQH6"] },
+      ],
+    } as any);
+
+    spyOn(redisStore, "ping").mockResolvedValue("PONG");
+    spyOn(redisStore, "getStats").mockResolvedValue({
+      date: "2026-03-25",
+      barCount: 10,
+      symbolCount: 2,
+    } as any);
+    spyOn(timescaleStore, "ping").mockResolvedValue(true);
+    spyOn(redisStore, "getAllLatestArray").mockResolvedValue([
+      {
+        symbol: "ESH6",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: 1_774_404_000_000,
+        endTime: 1_774_404_060_000,
+      },
+    ]);
+    spyOn(redisStore, "getAllSnapshots").mockResolvedValue({
+      ESH6: { productCode: "ES", timestamp: 1_774_404_000_000 },
+    } as any);
+    spyOn(redisStore, "getAllActiveContracts").mockResolvedValue({
+      ES: { productCode: "ES", updatedAt: 1_774_404_000_000, contracts: [] },
+    } as any);
+    spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({
+      "1m:ESH6": {
+        symbol: "ESH6",
+        timeframe: "1m",
+        lastSeenBarTs: 1_774_404_000_000,
+        updatedAt: 1_774_404_000_000,
+        source: "live",
+      },
+    } as any);
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue(["ESH6", "NQH6"]);
+
+    const response = await handleRequest(
+      "GET",
+      "/admin/ops",
+      createRequest("/admin/ops", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const payload = (await response.json()) as any;
+
+    expect(response.status).toBe(200);
+    expect(payload.services.redis).toBe("connected");
+    expect(payload.redis.latestBarCount).toBe(1);
+    expect(payload.redis.snapshotCount).toBe(1);
+    expect(payload.jobs.snapshotRefresh.id).toBe("snapshot-refresh");
+    expect(payload.subscriptions.totalSymbols).toBe(2);
+  });
+
   test("returns recovery checkpoints when authorized", async () => {
     spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({
       "1m:ESH6": {

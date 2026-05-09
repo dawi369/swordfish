@@ -1,5 +1,6 @@
 import { CronJob } from "cron";
 import { redisStore } from "@/server/data/redis_store.js";
+import { Sentry } from "@/utils/sentry.js";
 
 interface ClearJobStatus {
   lastRunTime: number | null;
@@ -67,6 +68,11 @@ export class DailyClearJob {
     } catch (err) {
       this.status.lastSuccess = false;
       this.status.lastError = err instanceof Error ? err.message : String(err);
+      Sentry.captureException(err, {
+        tags: {
+          job: "daily-clear",
+        },
+      });
 
       await this.saveStatus();
 
@@ -76,6 +82,18 @@ export class DailyClearJob {
 
   getStatus(): ClearJobStatus {
     return { ...this.status };
+  }
+
+  getSchedule() {
+    return {
+      id: "daily-clear",
+      label: "Daily Redis maintenance",
+      cron: "0 2 * * *",
+      timezone: "America/New_York",
+      description: "Clears hot intraday Redis data after the trading day boundary.",
+      nextRunTime: this.cronJob ? this.cronJob.nextDate().toMillis() : null,
+      scheduled: Boolean(this.cronJob),
+    };
   }
 
   schedule(): void {

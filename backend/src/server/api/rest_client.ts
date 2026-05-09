@@ -21,6 +21,7 @@ import type { MassiveWSClient } from "@/server/api/massive/ws_client.js";
 import type { Server, ServerWebSocket } from "bun";
 import { logger } from "@/utils/logger.js";
 import { recoveryService } from "@/services/recovery_service.js";
+import { Sentry } from "@/utils/sentry.js";
 
 let massiveClient: MassiveWSClient | null = null;
 
@@ -80,6 +81,12 @@ const ADMIN_RATE_LIMIT_MAX = HUB_ADMIN_RATE_LIMIT_MAX ?? 60;
 
 type RateLimitScope = "public" | "admin";
 
+type AdminJobKey =
+  | "dailyClear"
+  | "subscriptionRefresh"
+  | "snapshotRefresh"
+  | "frontMonthRefresh";
+
 interface RateLimitState {
   count: number;
   resetAt: number;
@@ -94,6 +101,45 @@ interface RateLimitDecision {
 }
 
 const rateLimitBuckets = new Map<string, RateLimitState>();
+
+function maxTimestamp(values: Array<number | null | undefined>): number | null {
+  const timestamps = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+  return timestamps.length > 0 ? Math.max(...timestamps) : null;
+}
+
+function minTimestamp(values: Array<number | null | undefined>): number | null {
+  const timestamps = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+  return timestamps.length > 0 ? Math.min(...timestamps) : null;
+}
+
+function ageMs(timestamp: number | null, now: number): number | null {
+  return timestamp ? Math.max(0, now - timestamp) : null;
+}
+
+function buildJobState() {
+  return {
+    dailyClear: {
+      ...dailyClearJob.getSchedule(),
+      status: dailyClearJob.getStatus(),
+    },
+    subscriptionRefresh: {
+      ...monthlySubscriptionJob.getSchedule(),
+      status: monthlySubscriptionJob.getStatus(),
+    },
+    snapshotRefresh: {
+      ...snapshotJob.getSchedule(),
+      status: snapshotJob.getStatus(),
+    },
+    frontMonthRefresh: {
+      ...frontMonthJob.getSchedule(),
+      status: frontMonthJob.getStatus(),
+    },
+  } satisfies Record<AdminJobKey, unknown>;
+}
 
 function parseTimeframe(value: string | null, fallback: string): string {
   if (!value) return fallback;
@@ -584,7 +630,133 @@ export async function handleRequest(
         },
         dailyClearJob: clearJobStatus,
         subscriptionRefreshJob: refreshJobStatus,
+        snapshotRefreshJob: snapshotJob.getStatus(),
+        frontMonthRefreshJob: frontMonthJob.getStatus(),
       });
+    }
+
+    if (method === "GET" && path === "/admin/ops") {
+      try {
+        const now = Date.now();
+        let redisOk = false;
+        let timescaleOk = false;
+        const timescaleEnabled = timescaleStore.isEnabled;
+
+        try {
+          redisOk = (await redisStore.ping()) === "PONG";
+        } catch {
+          redisOk = false;
+        }
+
+        if (timescaleEnabled) {
+          try {
+            timescaleOk = await timescaleStore.ping();
+          } catch {
+            timescaleOk = false;
+          }
+        }
+
+        const [
+          redisStats,
+          latestBars,
+          snapshots,
+          activeContracts,
+          recoveryCheckpoints,
+          subscribedSymbols,
+        ] = await Promise.all([
+          redisStore.getStats(),
+          redisStore.getAllLatestArray(),
+          redisStore.getAllSnapshots(),
+          redisStore.getAllActiveContracts(),
+          redisStore.getAllRecoveryCheckpoints(),
+          redisStore.getSubscribedSymbols(),
+        ]);
+
+        const snapshotTimestamps = Object.values(snapshots).map(
+          (snapshot) => snapshot.timestamp,
+        );
+        const activeContractTimestamps = Object.values(activeContracts).map(
+          (contractSet) => contractSet.updatedAt,
+        );
+        const recoveryTimestamps = Object.values(recoveryCheckpoints).map(
+          (checkpoint) => checkpoint.updatedAt,
+        );
+        const latestBarTimestamps = latestBars.map((bar) => bar.startTime);
+        const newestBarTime = maxTimestamp(latestBarTimestamps);
+        const oldestBarTime = minTimestamp(latestBarTimestamps);
+        const latestSnapshotTime = maxTimestamp(snapshotTimestamps);
+        const oldestSnapshotTime = minTimestamp(snapshotTimestamps);
+        const latestActiveContractTime = maxTimestamp(activeContractTimestamps);
+        const latestRecoveryCheckpointTime = maxTimestamp(recoveryTimestamps);
+        const wsConnected = massiveClient?.isConnected() || false;
+        const servicesHealthy =
+          redisOk && wsConnected && (!timescaleEnabled || timescaleOk);
+        const jobs = buildJobState();
+        const failingJobs = Object.entries(jobs)
+          .filter(([, job]) => !(job as { status: { lastSuccess: boolean } }).status.lastSuccess)
+          .map(([key]) => key);
+
+        return respond({
+          status: servicesHealthy && failingJobs.length === 0 ? "ok" : "degraded",
+          timestamp: now,
+          services: {
+            redis: redisOk ? "connected" : "disconnected",
+            timescaledb: timescaleEnabled
+              ? timescaleOk
+                ? "connected"
+                : "disconnected"
+              : "disabled",
+            massiveWs: wsConnected ? "connected" : "disconnected",
+          },
+          redis: {
+            ...redisStats,
+            latestBarCount: latestBars.length,
+            snapshotCount: Object.keys(snapshots).length,
+            activeContractProductCount: Object.keys(activeContracts).length,
+            recoveryCheckpointCount: Object.keys(recoveryCheckpoints).length,
+            subscribedSymbolCount: subscribedSymbols.length,
+          },
+          freshness: {
+            latestBars: {
+              newestTimestamp: newestBarTime,
+              newestAgeMs: ageMs(newestBarTime, now),
+              oldestTimestamp: oldestBarTime,
+              oldestAgeMs: ageMs(oldestBarTime, now),
+            },
+            snapshots: {
+              newestTimestamp: latestSnapshotTime,
+              newestAgeMs: ageMs(latestSnapshotTime, now),
+              oldestTimestamp: oldestSnapshotTime,
+              oldestAgeMs: ageMs(oldestSnapshotTime, now),
+            },
+            activeContracts: {
+              newestTimestamp: latestActiveContractTime,
+              newestAgeMs: ageMs(latestActiveContractTime, now),
+            },
+            recoveryCheckpoints: {
+              newestTimestamp: latestRecoveryCheckpointTime,
+              newestAgeMs: ageMs(latestRecoveryCheckpointTime, now),
+            },
+          },
+          jobs,
+          subscriptions: {
+            upstreamCount: massiveClient?.getSubscriptions().length ?? 0,
+            totalSymbols:
+              massiveClient
+                ?.getSubscriptions()
+                .reduce((sum, sub) => sum + sub.symbols.length, 0) ?? 0,
+            persistedSymbols: subscribedSymbols,
+          },
+          frontMonths: frontMonthJob.getCache(),
+        });
+      } catch (err) {
+        Sentry.captureException(err, {
+          tags: {
+            route: "/admin/ops",
+          },
+        });
+        throw err;
+      }
     }
 
     if (method === "GET" && path === "/admin/front-months") {
