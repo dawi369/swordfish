@@ -1560,7 +1560,14 @@ export async function handleRequest(
     }
 
     if (method === "POST" && path === "/admin/recovery/backfill") {
-      const symbols = await redisStore.getSubscribedSymbols();
+      const requestedSymbols = url.searchParams
+        .get("symbols")
+        ?.split(",")
+        .map((symbol) => symbol.trim().toUpperCase())
+        .filter(Boolean);
+      const symbols = requestedSymbols?.length
+        ? Array.from(new Set(requestedSymbols))
+        : await redisStore.getSubscribedSymbols();
       const results = await recoveryService.backfillSymbolsFromProvider(symbols, {
         source: "manual",
         excludeCurrentMinute: true,
