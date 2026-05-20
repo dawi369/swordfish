@@ -1,136 +1,173 @@
-# MK3 Dream Data Layer Handoff
+# MK3 Durable Analytics Layer Plan
 
-## Current Goal
+## Executive Intent
 
-Build MK3 into an analytics-first backend for real-time futures data: a reliable
-market-data brain that can later power a ChatGPT-like product with safe custom
-tools, live context, historical context, and auditable operations.
+Make the backend durable analytics layer live, trusted, and ready for the next
+frontend. The target is not a warehouse science project. It is a production
+market-data substrate with clear ownership boundaries:
 
-The frontend is intentionally out of scope for this phase. The backend/data/API
-layer must become boring, inspectable, durable, and easy to operate before the
-next UI is rebuilt on top of it.
+- Redis is the hot serving layer.
+- Postgres/Timescale-shaped storage is the durable analytics record.
+- Massive WebSocket is the live data source.
+- Massive REST is bounded recovery only while access allows it.
+- Massive flat files, when available, ingest through the same durable boundary.
+- Frontend and future AI tools consume typed backend APIs, not raw Redis or SQL.
 
-## Direction
+The end state is a backend that can answer: what happened, where did the data
+come from, how fresh is it, what failed, and which frontend surface should trust
+which endpoint.
 
-Use the current stack and make the boundaries correct:
+## Architectural North Star
 
-- Postgres is the durable analytics store and source of record from the
-  migration point forward.
-- TimescaleDB/TigerData is the likely upgrade path, but the schema must boot on
-  plain Railway Postgres first.
-- Redis remains the hot serving/cache layer for latest bars, RedisTimeSeries
-  chart windows, sessions, snapshots, live fanout, and fast bootstrap.
-- Redis must be rebuildable from durable `bars_1m`; it is not archival truth.
-- Massive WebSocket is the live source.
-- Massive REST is the temporary bounded backfill source.
-- Massive flat files, when available, must write through the same ingestion
-  boundary into the same durable model.
-- AI/tooling should call typed backend service APIs, not raw Redis/Postgres.
+### Source Ownership
 
-Do not introduce Databricks, ClickHouse, Upstash, Supabase, Neon, or Datadog
-clients as foundational dependencies until the specific need is proven. Less is
-more: reliability, auditability, and simple recovery paths are more important.
+| Layer | Owns | Does Not Own |
+|---|---|---|
+| Massive WS | Live futures aggregates | History, audit, frontend state |
+| Massive REST | Small recovery/backfill windows | Always-on historical completeness |
+| Future Massive flat files | Bulk historical completeness | Live serving |
+| Redis | Latest bars, RedisTimeSeries windows, sessions, snapshots, active contracts, fanout, fast bootstrap | Durable history or audit truth |
+| Postgres/Timescale-shaped store | `bars_1m`, ingestion runs, provider outcomes, operational runs, quality summaries | Browser-facing realtime fanout |
+| Backend service APIs | Stable contracts for frontend/tools | Raw datastore leakage |
+| Frontend | Presentation, interaction, user workflows | Data repair, source classification, provider behavior |
 
-## What Has Been Implemented So Far
+### Hard Boundary
 
-### Durable Store Foundation
+The frontend should never decide whether Redis, Postgres, REST backfill, or flat
+files are correct. It should ask the backend for a typed answer that includes
+freshness, source, and quality metadata.
 
-- `backend/src/server/data/timescale_store.ts`
-  - Boots on plain Postgres when `DATABASE_URL` exists.
-  - Enables Timescale hypertables/continuous aggregates only if the extension is
-    available.
-  - Owns canonical `bars_1m` upserts and reads.
-  - Adds durable schema support for:
-    - `bars_1m`
-    - `operational_runs`
-    - `ingestion_runs`
-    - `provider_fetch_outcomes`
-    - `data_quality_summaries`
-  - Adds `quality_flags` on `bars_1m`.
-  - Exposes durable stats for symbol counts, bar counts, first/last timestamps,
-    gap counts, and spike counts.
+## Current Production State
 
-### Write/Read Boundaries
+Already live or implemented:
 
-- `backend/src/services/market_data_writer.ts`
-  - Centralizes live bar fanout to Redis, local recovery, and durable storage.
-- `backend/src/services/durable_bar_writer.ts`
-  - Centralizes durable historical/provider/flat-file-style batch writes through
-    `writeDurableBars`.
-  - Reports partial failures without taking down the live path.
-- `backend/src/services/flat_file_ingestion_service.ts`
-  - Provides the future flat-file entrypoint and routes parsed bars through the
-    same `source=flat_file` durable boundary.
+- Railway production has `mk3-backend`, `mk3-frontend`, `Redis`, and `Postgres`.
+- `mk3-backend` has `DATABASE_URL` wired to Railway Postgres by service
+  reference.
+- `/health` reports Redis, durable Postgres, and Massive WebSocket connected.
+- Live WebSocket bars are being written to durable `bars_1m` with
+  `source=live_ws`.
+- Durable inspection endpoints exist under `/admin/durable/*`.
+- `/admin/coverage` classifies symbol data state.
+- `/admin/hot-cache/rebuild` can dry-run and execute Redis rebuilds from
+  durable bars.
+- `market_data_repository` reads Redis first and falls back to durable `bars_1m`
+  for empty `tf=1m` Redis ranges.
+- `durable_bar_writer` is the shared batch boundary for provider REST and future
+  flat-file ingestion.
+- `flat_file_ingestion_service` exists as the future flat-file entrypoint.
+- Production verifier passes health, durable rows, recent live rows, coverage,
+  and hot-cache dry-run.
 
-- `backend/src/services/market_data_repository.ts`
-  - Reads Redis first for chart ranges.
-  - Falls back to durable `bars_1m` for empty `tf=1m` Redis ranges.
-  - Returns a source label: `redis`, `timescale`, or `empty`.
+Current blocker:
 
-- `backend/src/services/recovery_service.ts`
-  - Provider backfills now write to durable `bars_1m`.
-  - Provider fetch outcomes are recorded durably as success, empty, or failed.
+- Massive REST backfill returns `403 Forbidden` / `429 Too Many Requests`.
+- That prevents provider-outcome and ingestion-run-with-bars verifier gates from
+  passing.
+- This is likely an upstream access/concurrency/quota issue, not a durable-layer
+  write-path issue.
 
-### Redis Hot-Cache Rebuild
+## Target End State
 
-- `backend/src/services/hot_cache_rebuilder.ts`
-  - Can dry-run latest-week Redis rebuild from durable `bars_1m`.
-  - Can perform the rebuild by writing recovered bars back to Redis.
+This goal is complete only when all of these are true:
 
-- Admin APIs expose:
-  - `POST /admin/hot-cache/rebuild?dryRun=true`
-  - `POST /admin/hot-cache/rebuild?dryRun=false`
-  - admin command ids `hot-cache-rebuild-dry-run` and `hot-cache-rebuild`
+1. Production durable store is live and continuously receiving live
+   `source=live_ws` bars.
+2. Redis remains healthy as the hot serving layer.
+3. Durable store has enough provider or flat-file ingestion evidence to prove
+   historical repair works.
+4. A bounded hot-cache rebuild from durable storage has been verified.
+5. Admin diagnostics explain missing/stale data without manual SQL.
+6. Frontend connection points are documented and stable enough for the rebuild.
+7. Rollback is documented and keeps live serving intact.
+8. `bun run verify:production-data-layer` exits 0 against production, or the
+   verifier is intentionally revised with documented rationale.
 
-### Admin Coverage And Diagnostics
+Do not mark this goal complete while the production verifier fails due to
+provider/ingestion evidence.
 
-- `backend/src/server/api/rest_client.ts`
-  - `/admin/health` now includes durable stats and coverage classification.
-  - `/admin/ops` is the consolidated operator state.
-  - `/admin/coverage` returns subscribed/latest/durable symbol coverage.
-  - Missing/stale data is classified as:
-    - `ok`
-    - `not_subscribed`
-    - `subscribed_no_live_data`
-    - `provider_no_data`
-    - `stale_contract`
-    - `backfill_pending`
-  - Provider-empty evidence is now required before classifying a symbol as
-    `provider_no_data`; otherwise missing durable/provider evidence remains
-    `backfill_pending`.
+## Workstream 1 - Production Activation
 
-### Durable Inspection And Tool-Safe Contracts
+Purpose: make the durable layer operationally accepted, not merely deployed.
 
-- Admin APIs expose typed durable inspection views:
-  - `GET /admin/durable/symbols`
-  - `GET /admin/durable/bars/latest`
-  - `GET /admin/durable/provider-outcomes`
-  - `GET /admin/durable/operational-runs`
-  - `GET /admin/durable/ingestion-runs`
-  - `GET /admin/durable/quality/:symbol`
+Tasks:
 
-- `backend/src/services/analytics_tool_service.ts`
-  - Provides safe service-level functions for future LLM/tool adapters.
-  - Covers latest market state, symbol coverage explanations, range bars with
-    quality metadata, provider/backfill status, and dry-run diagnostics.
-  - Keeps future tools away from raw Redis/Postgres access.
+- Confirm `mk3-backend` production deploy is serving the latest durable code.
+- Confirm `DATABASE_URL` is present on `mk3-backend` and points to Railway
+  Postgres by service reference.
+- Confirm durable disabling flags are absent:
+  - `DISABLE_DURABLE_STORE=true`
+  - `ENABLE_TIMESCALE=false`
+- Confirm `/health` reports:
+  - `redis=connected`
+  - `timescaledb=connected`
+  - `massiveWs=connected`
+- Confirm `/admin/health` reports non-zero durable symbols and bars.
+- Confirm latest durable `source=live_ws` rows are recent during market hours.
+- Run `POST /admin/hot-cache/rebuild?dryRun=true`.
+- Run the production verifier from the backend package.
 
-- `backend/src/services/data_quality.ts`
-  - Provides focused quality helpers for invalid OHLC, zero/negative volume,
-    missing intervals, and close-to-close jumps.
-  - Used by durable `bars_1m` writes for per-bar `quality_flags`.
+Acceptance:
 
-### Runtime Hot-Cache Rebuild
+```bash
+cd backend
+BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
+bun run verify:production-data-layer
+```
 
-- `HUB_REBUILD_HOT_CACHE_ON_STARTUP=false`
-  - Opt-in startup rebuild from durable `bars_1m`.
-  - Default remains conservative until production Postgres is verified.
-  - Startup rebuild runs are recorded as `operational_runs`.
-  - Rebuild failures are recorded and logged but do not block process startup.
+The verifier must exit 0, unless the only failing gate is explicitly re-scoped
+in this file and the replacement gate proves the same production property.
 
-### Query-Time Data Quality
+## Workstream 2 - Provider And Historical Ingestion
 
-- `/bars/range/:symbol` now returns quality metadata:
+Purpose: prove the durable layer can receive non-live bars through a controlled
+batch boundary.
+
+Preferred order:
+
+1. Try targeted Massive REST recovery for one liquid symbol.
+2. If Massive REST is blocked by the single-active-WS/account model, document
+   that constraint as provider behavior.
+3. Use flat-file ingestion as the durable historical path once access is
+   available.
+
+Tasks:
+
+- Run targeted recovery only, never broad recovery by default:
+
+```bash
+POST /admin/recovery/backfill?symbols=NQM6
+```
+
+- Confirm `provider_fetch_outcomes` records the attempt.
+- Confirm `ingestion_runs` records success when bars are returned.
+- If REST remains forbidden, add an explicit provider constraint note to
+  `docs/backend/provider-integrations.md` and this file.
+- Define the first production flat-file activation path:
+  - source file location
+  - parser responsibility
+  - symbol/timeframe constraints
+  - idempotency behavior
+  - operational-run recording
+  - ingestion-run recording
+  - validation query
+
+Acceptance:
+
+- At least one non-live ingestion path writes bars through `durable_bar_writer`.
+- The resulting rows are visible in `bars_1m` with the correct source label:
+  `provider_rest` or `flat_file`.
+- The run is visible through `/admin/durable/ingestion-runs`.
+- The source outcome is visible through provider or flat-file diagnostics.
+
+## Workstream 3 - Data Quality And Trust Semantics
+
+Purpose: make frontend and operator surfaces honest about data confidence.
+
+Tasks:
+
+- Keep `/bars/range/:symbol` returning:
+  - `source`
   - `gapCount`
   - `spikeCount`
   - `invalidOhlcCount`
@@ -139,461 +176,216 @@ more: reliability, auditability, and simple recovery paths are more important.
   - `oldestBarTs`
   - `newestBarTs`
   - `freshness`
+- Keep coverage classes deterministic:
+  - `ok`
+  - `not_subscribed`
+  - `subscribed_no_live_data`
+  - `provider_no_data`
+  - `stale_contract`
+  - `backfill_pending`
+- Ensure `provider_no_data` requires real provider-empty evidence.
+- Keep failed provider calls classified as provider failures, not no-data.
+- Add or update tests whenever a coverage class changes.
 
-- Quality thresholds are configurable:
-  - `DATA_QUALITY_GAP_THRESHOLD_MS=90000`
-  - `DATA_QUALITY_SPIKE_THRESHOLD_PCT=0.25`
+Acceptance:
 
-- Admin/tool quality reads can persist `data_quality_summaries` rows so gap,
-  spike, and invalid-bar summaries have an audit trail tied to the requested
-  symbol/range/thresholds.
+- A frontend can show stale/missing data without inventing reasons.
+- An operator can trace an odd chart from frontend range response to durable
+  bars, ingestion run, and provider/flat-file evidence.
 
-### Auditability And Observability
+## Workstream 4 - Frontend Connection Points
 
-- `backend/src/utils/operational_runs.ts`
-  - Jobs, recovery paths, and admin actions use durable operational-run records.
+Purpose: document the stable backend surfaces the rebuilt frontend should use.
 
-- `backend/src/utils/telemetry.ts`
-  - Emits structured metric events as JSON logs in production.
-  - Quiet in tests.
-  - Designed so Datadog can ingest log-derived metrics later without adding an
-    in-process Datadog dependency now.
-  - Provider fetches emit log-derived metrics for success, empty, and failed
-    outcomes plus returned bar counts and run symbol counts.
+Recommended frontend layers:
 
-- `backend/src/utils/sentry.ts`
-  - Sentry supports `SENTRY_ENVIRONMENT` and `SENTRY_RELEASE`.
-  - Sentry remains the exception/degraded-condition tool.
-  - High-value events now include context tags such as `run_id`, `job_name`,
-    `symbol`, `ingestion_source`, and provider/recovery source when available.
+### Bootstrap Layer
 
-### Documentation Updated
+Use for initial app load and system readiness.
+
+- `GET /health`
+- `GET /symbols`
+- `GET /admin/health` for protected operator surfaces only
+- `GET /admin/ops` for protected operator surfaces only
+
+Frontend guidance:
+
+- Public UI should degrade gracefully when durable storage is degraded but Redis
+  is still serving.
+- Operator UI should show durable state separately from Redis state.
+
+### Live Market Layer
+
+Use for realtime terminal behavior.
+
+- Browser WebSocket hub for live updates.
+- Redis-backed latest/session/snapshot endpoints exposed by the backend.
+
+Frontend guidance:
+
+- Treat WebSocket as live state, not historical truth.
+- Reconnect should re-bootstrap from backend snapshots/ranges.
+
+### Chart Range Layer
+
+Use for chart windows and historical context.
+
+- `GET /bars/range/:symbol?tf=1m&start=...&end=...`
+
+Frontend guidance:
+
+- Display `source` and freshness in developer/operator contexts.
+- Do not hide gaps or stale data if quality metadata says the range is suspect.
+- Do not query Postgres directly from the frontend.
+
+### Coverage And Explainability Layer
+
+Use for missing/stale symbol explanations and admin diagnostics.
+
+- `GET /admin/coverage`
+- future public-safe coverage endpoint if non-admin UX needs it
+
+Frontend guidance:
+
+- Use backend-provided `status` and `reason`.
+- Do not recreate coverage classification in React state.
+
+### Operator Repair Layer
+
+Use only behind admin protection.
+
+- `POST /admin/recovery/backfill?symbols=<symbol>`
+- `POST /admin/hot-cache/rebuild?dryRun=true`
+- `POST /admin/hot-cache/rebuild?dryRun=false`
+- `GET /admin/durable/provider-outcomes`
+- `GET /admin/durable/ingestion-runs`
+- `GET /admin/durable/operational-runs`
+
+Frontend guidance:
+
+- Default repair actions to dry-run or targeted execution.
+- Never expose broad backfill as a casual one-click action.
+- Show run ids, symbols, source, status, and failure reason.
+
+### Future AI Tool Layer
+
+Use service-level functions, not datastore clients.
+
+- `analytics_tool_service.getLatestMarketState`
+- `analytics_tool_service.getSymbolCoverage`
+- `analytics_tool_service.getRangeBars`
+- `analytics_tool_service.getProviderBackfillStatus`
+- `analytics_tool_service.runSafeDiagnostics`
+
+Frontend guidance:
+
+- AI/tool surfaces should consume typed backend contracts.
+- Tool calls should inherit the same source/freshness/quality semantics as the
+  normal UI.
+
+## Workstream 5 - Operational Runbook
+
+Purpose: make the system repairable by an operator under pressure.
+
+Required docs:
 
 - `docs/backend/data-layer.md`
-- `docs/backend/api.md`
 - `docs/backend/operations.md`
-- `docs/roadmap/data-layer-migration-plan.md`
-- `docs/decisions/ADR-0002-redis-as-hot-source-of-truth.md`
 - `docs/runbooks/railway-deploy.md`
-- `docs/specs/backend-data-layer-v1.md`
-- `docs/specs/observability-metrics.md`
-- `backend/README.md`
-- `backend/.env.example`
+- `docs/backend/provider-integrations.md`
+- this `goal.md`
 
-## Current Verification State
+Runbook must cover:
 
-The current backend work passes:
+- how to verify live durable writes
+- how to run targeted recovery
+- how to diagnose provider REST forbidden/rate-limited responses
+- how to dry-run Redis rebuild
+- how to execute Redis rebuild
+- how to read ingestion runs
+- how to read provider outcomes
+- how to distinguish Redis degradation from durable-store degradation
+- how to roll back durable storage without breaking Redis hot serving
+
+## Workstream 6 - Rollback And Blast Radius
+
+Rollback principle:
+
+Disabling durable storage must not break Redis live serving.
+
+Safe rollback levers:
+
+- unset `DATABASE_URL` on `mk3-backend`, or
+- set `DISABLE_DURABLE_STORE=true`, then
+- redeploy/restart backend, then
+- confirm `/health` keeps Redis and Massive WebSocket connected.
+
+Do not delete Railway Postgres as a rollback. First detach or disable the
+application path. Data deletion is a separate, explicit infrastructure action.
+
+Do not delete Railway Redis while the frontend/backend still depend on Redis hot
+serving.
+
+## Verification Commands
+
+Local static and smoke checks:
 
 ```bash
 cd backend
 bunx tsc --noEmit --skipLibCheck
 bun run test:smoke
-bun run test
+```
+
+Full local test pass:
+
+```bash
+cd backend
 bun run test:unit
-```
-
-The production data-layer acceptance gates have a verifier script:
-
-```bash
-cd backend
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
-HUB_API_KEY=... \
-bun run verify:production-data-layer
-```
-
-The verifier requires the latest durable `source=live_ws` row to be recent by
-default, using `PRODUCTION_DATA_LAYER_MAX_LIVE_BAR_AGE_MS` only for deliberate
-one-off activation checks during known market pauses.
-
-Last known smoke result:
-
-- 88 pass
-- 9 skip
-- 0 fail
-
-The skipped tests are environment-dependent Redis, Postgres/Timescale, and live
-provider tests. Redis integration tests run with `bun run test:redis`, which
-sets `RUN_REDIS_TESTS=1` and requires a reachable Redis instance. Postgres/
-Timescale tests run with `bun run test:timescale`, which sets
-`RUN_TIMESCALE_TESTS=1` and requires a reachable database.
-
-## Important Current Caveat
-
-Railway Postgres has been provisioned in the Swordfish production environment,
-`mk3-backend` has `DATABASE_URL` wired to the Railway Postgres service by
-Railway variable reference, and production `/health` currently reports Redis,
-durable Postgres, and Massive WebSocket connected.
-
-The remaining production blocker is Massive REST backfill access/rate limiting,
-not the durable live-write path. The production verifier now passes public
-health, durable store stats, latest durable `bars_1m` rows, recent live
-`source=live_ws` rows, coverage durable symbol counts, and hot-cache rebuild
-dry-run. It still fails the provider outcome and successful ingestion-run gates
-because manual provider backfills are returning `403 Forbidden` / `429 Too Many
-Requests` instead of bars.
-
-The targeted manual recovery endpoint is deployed and behaves correctly:
-
-```bash
-POST /admin/recovery/backfill?symbols=NQM6
-# returns only ["NQM6"], but Massive REST currently returns 403 Forbidden
-```
-
-Railway also had a public major service disruption on May 20, 2026 affecting
-login, dashboard/API/control-plane, deploy, and workload recovery paths. Treat
-Railway login/API failures during this window as external infrastructure if
-normal CLI auth regresses again.
-
-Normal Railway CLI inspection is still noisy locally because the old OAuth
-refresh token is stale. Token-scoped project commands work.
-
-Historical auth evidence from earlier in the session:
-
-```bash
-railway status
-# Warning: failed to refresh OAuth token: Token refresh failed: unknown: HTTP 404 Not Found. Please run `railway login` again.
-# Failed to fetch: error decoding response body
-
-railway whoami
-# Warning: failed to refresh OAuth token: Token refresh failed: unknown: HTTP 404 Not Found. Please run `railway login` again.
-# Failed to fetch: error decoding response body
-
-railway whoami
-# After CLI upgrade and aborted browser pairing: invalid_grant followed by
-# Unauthorized. Please run `railway login` again.
-```
-
-Non-interactive login is also blocked in this Codex shell unless token auth is
-provided:
-
-```bash
-railway login
-# Cannot login in non-interactive mode. For non-interactive environments, set RAILWAY_API_TOKEN or RAILWAY_TOKEN.
-
-railway login --browserless
-# Browserless login requires an interactive terminal. For non-interactive environments, set RAILWAY_API_TOKEN or RAILWAY_TOKEN.
-
-railway login --browserless
-# Before CLI upgrade: Device authorization request failed (HTTP 404 Not Found): /oauth/device/auth
-
-railway upgrade --check
-# Install method: Homebrew
-# Binary path: /opt/homebrew/bin/railway
-# Upgrade command: brew upgrade railway
-
-brew upgrade railway
-# Upgraded railway 4.58.0 -> 4.59.0
-
-railway login --browserless
-# Emits an activation code and waits at https://railway.com/activate.
-# The latest Codex attempt was stopped after the browser pairing was not completed.
-```
-
-Authenticated-shell options:
-
-```bash
-# Interactive terminal:
-railway login
-railway status
-
-# Browser pairing from Codex/TTY:
-railway login --browserless
-# Open https://railway.com/activate and enter the emitted code before it expires.
-
-# Non-interactive terminal:
-export RAILWAY_TOKEN=...
-railway whoami
-railway status
-```
-
-Do not store Railway tokens in repo files, `.env` examples, docs, shell history
-snippets, or shared logs.
-
-The code and production service are ready for the final acceptance check once
-Massive REST allows bounded backfill requests again:
-
-- run targeted `/admin/recovery/backfill?symbols=<symbol>`
-- confirm `provider_fetch_outcomes` records success or empty evidence
-- confirm `ingestion_runs` records a successful manual backfill with bars
-- rerun `bun run verify:production-data-layer`
-
-Local durable verification fallback while Railway is unavailable:
-
-```bash
-docker compose --profile durable up -d timescaledb
-cd backend
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
-  bun run test:timescale
-```
-
-Current local machine caveat: Docker CLI is present, and
-`docker compose --profile durable config` validates the opt-in Timescale service,
-but Docker/OrbStack is not running:
-
-```bash
-docker compose --profile durable up -d timescaledb
-# Cannot connect to the Docker daemon at unix:///Users/dawi/.orbstack/run/docker.sock.
-```
-
-## Completion Audit - 2026-05-20
-
-Objective: implement the backend/data/API foundation for an analytics-first,
-LLM-tool-ready market-data layer.
-
-Audit result: local implementation is substantially complete and verified, but
-the overall goal is not complete until production Railway Postgres is provisioned
-and the production verifier passes.
-
-| Requirement | Evidence | Status |
-|---|---|---|
-| Plain Postgres durable schema with optional Timescale features | `backend/src/server/data/timescale_store.ts`; covered by smoke plus skipped DB integration tests requiring `RUN_TIMESCALE_TESTS=1` and a reachable DB | Locally verified, production unverified |
-| Redis remains hot serving and is rebuildable from durable `bars_1m` | `market_data_repository.ts`, `hot_cache_rebuilder.ts`, `/admin/hot-cache/rebuild`, startup option `HUB_REBUILD_HOT_CACHE_ON_STARTUP=false`; durable range/quality failures degrade without breaking Redis ranges | Locally verified |
-| Live writes fan out to Redis, recovery, and durable store | `market_data_writer.ts`, `market_data_writer.test.ts` | Locally verified |
-| Provider/flat-file-style durable batch writes use one boundary | `durable_bar_writer.ts`, `flat_file_ingestion_service.ts`, `recovery_service.ts`, `durable_bar_writer.test.ts`, `flat_file_ingestion_service.test.ts`; ingestion runs are recorded as started/success/failed | Locally verified |
-| Durable admin inspection endpoints | `/admin/durable/symbols`, `/admin/durable/bars/latest`, `/admin/durable/provider-outcomes`, `/admin/durable/operational-runs`, `/admin/durable/ingestion-runs`, `/admin/durable/quality/:symbol`; `rest_client.test.ts` | Locally verified |
-| Deterministic coverage semantics | `rest_client.test.ts` covers `ok`, `not_subscribed`, `subscribed_no_live_data`, `provider_no_data`, `stale_contract`, `backfill_pending` | Locally verified |
-| Query-time quality metadata and durable summaries | `data_quality.ts`, `market_data_repository.ts`, `timescale_store.ts`, `data_quality.test.ts`, `rest_client.test.ts`, `analytics_tool_service.test.ts` | Locally verified |
-| Tool-safe service contracts for future LLM tools | `analytics_tool_service.ts`, `analytics_tool_service.test.ts`; tool range reads stay usable if durable quality-summary audit recording fails | Locally verified |
-| Sentry/log-derived telemetry context | `sentry.ts`, `sentry.test.ts`, `telemetry.ts`, recovery/job/admin write paths, `docs/specs/observability-metrics.md` | Locally verified by type/test coverage and docs |
-| Production Railway durable-store activation | Railway Postgres service is provisioned; `DATABASE_URL` is wired by Railway variable reference; `mk3-backend` deployment `8dda61aa-ba73-4724-9673-6408af8dc643` is `SUCCESS`; `/health` reports Redis, durable Postgres, and Massive WebSocket connected; production verifier passes durable/live/coverage/hot-cache checks; provider REST backfill still returns `403 Forbidden` / `429 Too Many Requests`, so provider outcome and ingestion-run-with-bars gates fail | Partially verified, blocked on Massive REST |
-
-Latest local verification:
-
-```bash
-cd backend
-bunx tsc --noEmit --skipLibCheck
-bun run test:smoke
-# 88 pass, 9 skip, 0 fail, 273 expect() calls, 97 tests across 17 files
-bun run test:unit
-# 91 pass, 24 skip, 0 fail, 278 expect() calls, 115 tests across 21 files
 bun run test
-# 134 pass, 36 skip, 0 fail, 607 expect() calls, 170 tests across 36 files
 ```
 
-Latest production verifier result after the targeted-backfill deployment:
+Production health:
 
 ```bash
-cd backend
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
-bun run verify:production-data-layer
-# PASS public health serving stores
-# PASS admin health durable store: symbols=12 bars=1780
-# PASS durable bars_1m rows
-# PASS live durable bars_1m rows
-# PASS coverage durable symbol counts
-# PASS hot cache rebuild dry run
-# FAIL provider fetch outcomes
-# FAIL durable ingestion runs
+curl https://mk3-backend-production.up.railway.app/health
 ```
 
-Production completion gate:
+Production admin checks should be run from a Railway-injected environment so
+secrets are not copied into shell history:
 
 ```bash
-cd backend
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
-HUB_API_KEY=... \
-bun run verify:production-data-layer
+railway run --service mk3-backend --environment production -- \
+  sh -c 'curl -s -H "X-API-Key: $HUB_API_KEY" https://mk3-backend-production.up.railway.app/admin/health'
 ```
 
-## Remaining Implementation Slice
-
-### 1. Finish Provider REST Backfill Acceptance
-
-Goal: complete the last production gate after durable live writes are already
-verified.
-
-Tasks:
-
-- Wait for Massive REST access/rate limits to recover or adjust the provider
-  account/quota.
-- Run a targeted manual recovery backfill for one liquid symbol.
-- Confirm `provider_fetch_outcomes` records success or empty evidence.
-- Confirm `ingestion_runs` records a successful manual backfill with bars.
-- Rerun `bun run verify:production-data-layer` from the backend package.
-
-Acceptance:
-
-- `provider_fetch_outcomes` includes useful manual backfill evidence.
-- `ingestion_runs` includes a successful manual backfill with bars.
-- The production verifier exits 0.
-- Only then mark the goal complete.
-
-## Locally Completed Slices
-
-These were originally implementation slices, but they are now covered by the
-local code, docs, and tests listed in the completion audit above. Do not redo
-these unless the production verifier exposes a real gap.
-
-### 2. Add Durable Query/Inspection Endpoints
-
-Goal: make durable data inspectable without exposing raw SQL.
-
-Add admin endpoints for:
-
-- recent durable symbols
-- latest durable bar per symbol
-- provider fetch outcomes by symbol
-- operational runs by type/status
-- ingestion runs by source/status
-- data quality summary for a symbol and time range
-
-Keep responses typed, paginated/limited, and safe for future AI tools.
-
-Acceptance:
-
-- Admin can answer: what symbols are durable, which are stale, which provider
-  calls returned empty, which jobs/backfills failed, and when.
-- Tests cover auth, response shape, empty states, and error states.
-
-### 3. Tighten Coverage Semantics
-
-Goal: make missing ticker diagnosis precise.
-
-Improve classification with provider outcomes:
-
-- `provider_no_data` only when a recent provider fetch returned empty.
-- `backfill_pending` when no durable/provider evidence exists yet.
-- `stale_contract` when latest Redis bar is old and symbol is not in current
-  subscription or current active contracts.
-- `subscribed_no_live_data` when subscribed but no live bar has arrived within
-  an expected market/session window.
-
-Acceptance:
-
-- Coverage status is deterministic and documented.
-- Tests cover each coverage class.
-- `/admin/coverage` gives actionable next steps.
-
-### 4. Make Redis Rebuild A Runtime Startup Option
-
-Goal: Redis can recover from durable state after restart or Redis loss.
-
-Tasks:
-
-- Add a startup option such as `HUB_REBUILD_HOT_CACHE_ON_STARTUP=true`.
-- Keep the default conservative until production DB is verified.
-- Record rebuild runs as `operational_runs`.
-- Emit metrics for hydrated symbols, skipped symbols, and bars loaded.
-
-Acceptance:
-
-- Dry-run and real rebuild are tested.
-- A backend restart can rebuild latest-week Redis state from durable `bars_1m`.
-- Rebuild failures degrade operator status but do not block health forever.
-
-### 5. Harden Data Quality
-
-Goal: trust charts and future AI tools.
-
-Tasks:
-
-- Make spike/gap detection configurable.
-- Track gap/spike summaries durably enough for audit.
-- Add query-time metadata to range responses:
-  - `source`
-  - `gapCount`
-  - `spikeCount`
-  - `oldestBarTs`
-  - `newestBarTs`
-  - `freshness`
-- Avoid false confidence when a symbol is illiquid or out of session.
-
-Acceptance:
-
-- Weird chart spikes can be traced to raw durable bars, provider source, and
-  ingestion run.
-- Tests cover obvious invalid OHLC, large close-to-close jumps, and missing
-  intervals.
-
-### 6. Add Tool-Safe Service Contracts
-
-Goal: prepare for the future ChatGPT-like futures assistant.
-
-Do not build the AI layer yet. First define backend services that are safe to
-expose as tools later:
-
-- get latest market state
-- get symbol coverage
-- get range bars with quality metadata
-- get provider/backfill status
-- run safe dry-run diagnostics
-- explain why a symbol is missing/stale
-
-Acceptance:
-
-- Tool candidates are service-level functions with typed inputs/outputs.
-- No tool needs direct Redis/Postgres access.
-- Admin-only mutations stay protected and auditable.
-
-### 7. Sentry And Datadog Follow-Through
-
-Goal: production incidents are explainable.
-
-Sentry:
-
-- Ensure production sets `SENTRY_DSN`, `SENTRY_ENVIRONMENT=production`, and
-  `SENTRY_RELEASE`.
-- Add Sentry context/tags for ingestion source, run id, symbol, and job name on
-  high-value exceptions.
-
-Datadog:
-
-- Start by ingesting structured `metric` logs.
-- Create dashboards/monitors for:
-  - durable store connected
-  - market data partial write failures
-  - stale symbol count
-  - spike symbol count
-  - provider empty/failed outcome rate
-  - admin repair command usage
-  - operational run failures
-- Only add a Datadog client if log-derived metrics are insufficient.
-
-Acceptance:
-
-- A production failure can be traced from Sentry event to operational run to
-  provider outcome to affected symbols.
-
-## Commands For The Next Codex Instance
-
-Start here:
+Production verifier:
 
 ```bash
-cd /Users/dawi/dev/mk3
-git status --short
-cd backend
-bunx tsc --noEmit --skipLibCheck
-bun run test:smoke
+railway run --service mk3-backend --environment production -- \
+  sh -c 'cd backend && BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app bun run verify:production-data-layer'
 ```
 
-If Railway remains unauthenticated, restore auth first:
+## Completion Checklist
 
-```bash
-railway login
-# or, in non-interactive shells:
-export RAILWAY_TOKEN=...
-railway whoami
-railway status
-```
-
-Useful runtime checks once Railway Postgres is configured:
-
-```bash
-curl https://mk3-backend-production.up.railway.app/health | jq
-railway run --service mk3-backend --environment production -- sh -c 'curl -s -H "X-API-Key: $HUB_API_KEY" https://mk3-backend-production.up.railway.app/admin/health' | jq
-railway run --service mk3-backend --environment production -- sh -c 'curl -s -H "X-API-Key: $HUB_API_KEY" https://mk3-backend-production.up.railway.app/admin/coverage' | jq
-railway run --service mk3-backend --environment production -- sh -c 'curl -s -X POST -H "X-API-Key: $HUB_API_KEY" "https://mk3-backend-production.up.railway.app/admin/hot-cache/rebuild?dryRun=true"' | jq
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app HUB_API_KEY=... bun run verify:production-data-layer
-```
+- [ ] Production `/health` reports Redis, durable store, and Massive WS connected.
+- [ ] `/admin/health` shows durable symbol and bar counts.
+- [ ] Latest durable `source=live_ws` rows are recent.
+- [ ] Targeted provider REST or flat-file ingestion writes non-live bars.
+- [ ] Ingestion run is visible through admin durable endpoints.
+- [ ] Provider or flat-file outcome is visible through diagnostics.
+- [ ] Hot-cache rebuild dry-run succeeds.
+- [ ] Production verifier exits 0.
+- [ ] Frontend connection points are documented in this file and linked docs.
+- [ ] Rollback path is documented and does not require deleting data services.
 
 ## Non-Negotiables
 
-- Preserve Redis as hot serving until durable rebuild/read paths are proven.
-- Do not claim historical completeness before backfill or flat files populate
-  the requested range.
-- Do not add a warehouse platform before the Postgres/Timescale foundation is
-  operationally solid.
-- Keep admin mutations API-key protected and durably audited.
-- Keep tests close to behavior: write path, fallback path, coverage classes,
-  recovery/backfill, admin auth, and operator diagnostics.
-- Favor fewer moving parts over impressive infrastructure.
+- Keep Redis until the frontend no longer depends on Redis-backed hot serving.
+- Do not call Redis durable truth.
+- Do not call Railway Postgres full TimescaleDB unless the extension is actually
+  enabled.
+- Do not claim historical completeness from live WebSocket rows.
+- Do not weaken provider/ingestion verifier gates just to get a green check.
+- Do not expose raw SQL or Redis access to the frontend.
+- Do not make broad backfills the default operator action.
+- Keep source, freshness, and quality metadata attached to chart data.
