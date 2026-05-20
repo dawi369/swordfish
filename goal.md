@@ -219,19 +219,35 @@ Timescale tests run with `bun run test:timescale`, which sets
 
 ## Important Current Caveat
 
-Railway Postgres has not been provisioned or wired yet in this session. That is
-an external infrastructure mutation and should be done intentionally.
+Railway Postgres has been provisioned in the Swordfish production environment,
+`mk3-backend` has `DATABASE_URL` wired to the Railway Postgres service by
+Railway variable reference, and production `/health` currently reports Redis,
+durable Postgres, and Massive WebSocket connected.
+
+The remaining production blocker is Massive REST backfill access/rate limiting,
+not the durable live-write path. The production verifier now passes public
+health, durable store stats, latest durable `bars_1m` rows, recent live
+`source=live_ws` rows, coverage durable symbol counts, and hot-cache rebuild
+dry-run. It still fails the provider outcome and successful ingestion-run gates
+because manual provider backfills are returning `403 Forbidden` / `429 Too Many
+Requests` instead of bars.
+
+The targeted manual recovery endpoint is deployed and behaves correctly:
+
+```bash
+POST /admin/recovery/backfill?symbols=NQM6
+# returns only ["NQM6"], but Massive REST currently returns 403 Forbidden
+```
 
 Railway also had a public major service disruption on May 20, 2026 affecting
-login, dashboard/API/control-plane, deploy, and workload recovery paths. The
-official Railway status page said services were recovering, but some workloads
-could still need redeploys and non-enterprise deploys were previously paused.
-Treat Railway login/API failures during this window as external infrastructure
-until the status page and CLI agree that auth/project inspection are healthy.
+login, dashboard/API/control-plane, deploy, and workload recovery paths. Treat
+Railway login/API failures during this window as external infrastructure if
+normal CLI auth regresses again.
 
-Current Railway CLI inspection is blocked locally by auth. After upgrading the
-Homebrew Railway CLI from `4.58.0` to `4.59.0`, stale refresh-token failures
-still prevent normal inspection:
+Normal Railway CLI inspection is still noisy locally because the old OAuth
+refresh token is stale. Token-scoped project commands work.
+
+Historical auth evidence from earlier in the session:
 
 ```bash
 railway status
@@ -245,13 +261,6 @@ railway whoami
 railway whoami
 # After CLI upgrade and aborted browser pairing: invalid_grant followed by
 # Unauthorized. Please run `railway login` again.
-```
-
-No token-based Railway auth is currently present in this shell:
-
-```bash
-printenv | rg '^(RAILWAY_TOKEN|RAILWAY_API_TOKEN)='
-# no output
 ```
 
 Non-interactive login is also blocked in this Codex shell unless token auth is
@@ -280,7 +289,7 @@ railway login --browserless
 # The latest Codex attempt was stopped after the browser pairing was not completed.
 ```
 
-Next authenticated-shell options:
+Authenticated-shell options:
 
 ```bash
 # Interactive terminal:
@@ -300,15 +309,13 @@ railway status
 Do not store Railway tokens in repo files, `.env` examples, docs, shell history
 snippets, or shared logs.
 
-The code is ready for:
+The code and production service are ready for the final acceptance check once
+Massive REST allows bounded backfill requests again:
 
-- creating a Railway Postgres service
-- setting `DATABASE_URL` on `mk3-backend`
-- ensuring neither `ENABLE_TIMESCALE=false` nor `DISABLE_DURABLE_STORE=true` is set
-- restarting the backend
-- verifying `/health`, `/admin/health`, `/admin/coverage`, and durable writes
-- verifying durable provider outcomes and ingestion-run audit rows
-- running `bun run verify:production-data-layer`
+- run targeted `/admin/recovery/backfill?symbols=<symbol>`
+- confirm `provider_fetch_outcomes` records success or empty evidence
+- confirm `ingestion_runs` records a successful manual backfill with bars
+- rerun `bun run verify:production-data-layer`
 
 Local durable verification fallback while Railway is unavailable:
 
@@ -348,7 +355,7 @@ and the production verifier passes.
 | Query-time quality metadata and durable summaries | `data_quality.ts`, `market_data_repository.ts`, `timescale_store.ts`, `data_quality.test.ts`, `rest_client.test.ts`, `analytics_tool_service.test.ts` | Locally verified |
 | Tool-safe service contracts for future LLM tools | `analytics_tool_service.ts`, `analytics_tool_service.test.ts`; tool range reads stay usable if durable quality-summary audit recording fails | Locally verified |
 | Sentry/log-derived telemetry context | `sentry.ts`, `sentry.test.ts`, `telemetry.ts`, recovery/job/admin write paths, `docs/specs/observability-metrics.md` | Locally verified by type/test coverage and docs |
-| Production Railway durable-store activation | Requires Railway auth, Postgres service, `DATABASE_URL`, backend restart, Redis hot serving connected, Massive websocket connected, recent live `source=live_ws` durable rows, useful provider outcomes, successful ingestion runs, and verifier pass; verifier contract covered by `production_data_layer_verifier.test.ts` | Blocked |
+| Production Railway durable-store activation | Railway Postgres service is provisioned; `DATABASE_URL` is wired by Railway variable reference; `mk3-backend` deployment `8dda61aa-ba73-4724-9673-6408af8dc643` is `SUCCESS`; `/health` reports Redis, durable Postgres, and Massive WebSocket connected; production verifier passes durable/live/coverage/hot-cache checks; provider REST backfill still returns `403 Forbidden` / `429 Too Many Requests`, so provider outcome and ingestion-run-with-bars gates fail | Partially verified, blocked on Massive REST |
 
 Latest local verification:
 
@@ -363,6 +370,22 @@ bun run test
 # 134 pass, 36 skip, 0 fail, 607 expect() calls, 170 tests across 36 files
 ```
 
+Latest production verifier result after the targeted-backfill deployment:
+
+```bash
+cd backend
+BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
+bun run verify:production-data-layer
+# PASS public health serving stores
+# PASS admin health durable store: symbols=12 bars=1780
+# PASS durable bars_1m rows
+# PASS live durable bars_1m rows
+# PASS coverage durable symbol counts
+# PASS hot cache rebuild dry run
+# FAIL provider fetch outcomes
+# FAIL durable ingestion runs
+```
+
 Production completion gate:
 
 ```bash
@@ -374,27 +397,26 @@ bun run verify:production-data-layer
 
 ## Remaining Implementation Slice
 
-### 1. Provision And Verify Railway Postgres
+### 1. Finish Provider REST Backfill Acceptance
 
-Goal: turn the durable path on in production.
+Goal: complete the last production gate after durable live writes are already
+verified.
 
 Tasks:
 
-- Add Railway Postgres to the Swordfish production environment.
-- Set `DATABASE_URL` for `mk3-backend`.
-- Do not set `ENABLE_TIMESCALE=false` or `DISABLE_DURABLE_STORE=true`.
-- Redeploy/restart `mk3-backend`.
-- Confirm `/health` reports durable storage connected.
-- Confirm live bars are being inserted into `bars_1m`.
-- Run an admin recovery backfill and confirm provider outcomes are recorded.
+- Wait for Massive REST access/rate limits to recover or adjust the provider
+  account/quota.
+- Run a targeted manual recovery backfill for one liquid symbol.
+- Confirm `provider_fetch_outcomes` records success or empty evidence.
+- Confirm `ingestion_runs` records a successful manual backfill with bars.
+- Rerun `bun run verify:production-data-layer` from the backend package.
 
 Acceptance:
 
-- `bars_1m` receives live `live_ws` rows.
-- `provider_fetch_outcomes` receives manual backfill outcomes.
-- `ingestion_runs` records manual backfill ingestion attempts.
-- `/admin/coverage` shows durable symbol counts.
-- Redis serving continues during durable-store issues.
+- `provider_fetch_outcomes` includes useful manual backfill evidence.
+- `ingestion_runs` includes a successful manual backfill with bars.
+- The production verifier exits 0.
+- Only then mark the goal complete.
 
 ## Locally Completed Slices
 
