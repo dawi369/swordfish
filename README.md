@@ -3,14 +3,17 @@
 Futures terminal workbench.
 
 MK3 is the current Swordfish build: a fast frontend, a Bun market-data hub,
-Redis as the hot source of truth, and enough backend discipline to make the
-thing debuggable when real data starts acting weird.
+Redis as the hot serving layer, durable Postgres/Timescale-shaped storage for
+analytics state, and enough backend discipline to make the thing debuggable when
+real data starts acting weird.
 
 The goal is not another pretty chart toy. The direction is:
 
 - futures-first, not equities with a futures skin
 - live bars, sessions, snapshots, active contracts, and front-month logic
 - Redis for low-latency product state
+- durable `bars_1m` storage for live bars, backfills, quality checks, and future
+  flat-file ingestion
 - explicit jobs and recovery instead of mystery cron behavior
 - operator visibility built into the app, not hidden in vibes and logs
 - Sentry for breakage, PostHog for product usage, admin console for system state
@@ -28,8 +31,9 @@ mk3/
 ## Runtime
 
 - `frontend/` serves the Swordfish terminal.
-- `backend/` connects to Massive, normalizes market data, writes Redis, and exposes REST/WebSocket APIs.
-- `Redis` is the beta hot path. It holds latest bars, time-series data, sessions, snapshots, active contracts, recovery checkpoints, and job state.
+- `backend/` connects to Massive, normalizes market data, writes Redis plus durable `bars_1m`, and exposes REST/WebSocket APIs.
+- `Redis` is the hot serving path. It holds latest bars, time-series data, sessions, snapshots, active contracts, recovery checkpoints, and job state.
+- `Postgres` is the durable analytics path. It stores normalized bars, operational runs, ingestion runs, provider outcomes, and quality summaries when `DATABASE_URL` is configured.
 - `Railway` is the current deployment target.
 
 ## Local

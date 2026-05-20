@@ -46,8 +46,8 @@ services:
   #     - REDIS_HOST=redis
   #     - REDIS_PORT=6379
   #     - DATABASE_URL=postgres://postgres:postgres@timescaledb:5432/postgres
-  #     - POLYGON_API_KEY=${POLYGON_API_KEY}
-  #     - POLYGON_API_URL=${POLYGON_API_URL:-https://api.massive.com}
+  #     - MASSIVE_API_KEY=${MASSIVE_API_KEY}
+  #     - MASSIVE_API_URL=${MASSIVE_API_URL:-https://api.massive.com}
   #     - HUB_PORT=${HUB_PORT:-3001}
   #     - HUB_API_KEY=${HUB_API_KEY}
   #   depends_on:
