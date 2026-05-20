@@ -1164,6 +1164,45 @@ describe("REST request handler", () => {
     expect(payload.providerBars).toBe(7);
   });
 
+  test("runs targeted manual recovery backfill for authorized requests", async () => {
+    const getSubscribedSpy = spyOn(redisStore, "getSubscribedSymbols");
+    const backfillSpy = spyOn(
+      recoveryService,
+      "backfillSymbolsFromProvider",
+    ).mockResolvedValue([
+      {
+        symbol: "ESH6",
+        source: "manual",
+        startMs: 1,
+        endMs: 2,
+        providerBars: 3,
+        checkpointBefore: 0,
+        checkpointAfter: 1,
+      },
+    ]);
+
+    const response = await handleRequest(
+      "POST",
+      "/admin/recovery/backfill",
+      createRequest("/admin/recovery/backfill?symbols=esh6,ESH6", {
+        method: "POST",
+        headers: {
+          "X-API-Key": Bun.env.HUB_API_KEY ?? "",
+        },
+      }),
+    );
+    const payload = (await response.json()) as any;
+
+    expect(response.status).toBe(200);
+    expect(getSubscribedSpy).not.toHaveBeenCalled();
+    expect(backfillSpy).toHaveBeenCalledWith(["ESH6"], {
+      source: "manual",
+      excludeCurrentMinute: true,
+    });
+    expect(payload.symbols).toEqual(["ESH6"]);
+    expect(payload.providerBars).toBe(3);
+  });
+
   test("returns not found for unknown routes and handles refresh-subscription failures", async () => {
     spyOn(monthlySubscriptionJob, "runRefresh").mockRejectedValue(
       new Error("refresh failed"),
