@@ -1,6 +1,8 @@
 import { massiveHistoryClient } from "@/server/api/massive/history_client.js";
+import { durableBarWriter } from "@/services/durable_bar_writer.js";
 import { recoveryStore } from "@/server/data/recovery_store.js";
 import { redisStore } from "@/server/data/redis_store.js";
+import { timescaleStore } from "@/server/data/timescale_store.js";
 import type { Bar } from "@/types/common.types.js";
 import {
   RECOVERY_BUCKET_MS,
@@ -14,6 +16,12 @@ import {
   type RecoveryStore,
   type RecoveryWindow,
 } from "@/types/recovery.types.js";
+import {
+  finishOperationalRun,
+  startOperationalRun,
+} from "@/utils/operational_runs.js";
+import { captureExceptionWithContext } from "@/utils/sentry.js";
+import { telemetry } from "@/utils/telemetry.js";
 
 function floorToMinute(timestamp: number): number {
   return Math.floor(timestamp / RECOVERY_BUCKET_MS) * RECOVERY_BUCKET_MS;
@@ -183,8 +191,20 @@ export class RecoveryService {
   ): Promise<RecoveryExecutionResult[]> {
     const results: RecoveryExecutionResult[] = [];
     const nowMs = Date.now();
+    const uniqueSymbols = Array.from(new Set(symbols));
+    const run = await startOperationalRun({
+      runType: "recovery",
+      name: "provider-backfill",
+      trigger: options.source,
+      metadata: {
+        symbolCount: uniqueSymbols.length,
+        disconnectedAt: options.disconnectedAt ?? null,
+        endMs: options.endMs ?? nowMs,
+        excludeCurrentMinute: options.excludeCurrentMinute ?? false,
+      },
+    });
 
-    for (const symbol of new Set(symbols)) {
+    for (const symbol of uniqueSymbols) {
       const checkpoint = await this.redis.getRecoveryCheckpoint(
         symbol,
         RECOVERY_TIMEFRAME,
@@ -217,9 +237,49 @@ export class RecoveryService {
           startMs: window.startMs,
           endMs: window.endMs,
         });
+        await timescaleStore.recordProviderFetchOutcome({
+          outcomeId: `${options.source}:${symbol}:${window.startMs}:${window.endMs}`,
+          provider: "massive",
+          source: options.source,
+          symbol,
+          timeframe: RECOVERY_TIMEFRAME,
+          status: providerBars.length > 0 ? "success" : "empty",
+          startMs: window.startMs,
+          endMs: window.endMs,
+          barCount: providerBars.length,
+          metadata: {
+            runId: run.runId,
+            disconnectedAt: options.disconnectedAt ?? null,
+            excludeCurrentMinute: options.excludeCurrentMinute ?? false,
+          },
+        });
+        telemetry.metric({
+          name: "mk3.provider_fetch.outcome",
+          type: "counter",
+          value: 1,
+          tags: {
+            provider: "massive",
+            source: options.source,
+            symbol,
+            timeframe: RECOVERY_TIMEFRAME,
+            status: providerBars.length > 0 ? "success" : "empty",
+          },
+        });
+        telemetry.metric({
+          name: "mk3.provider_fetch.bars",
+          type: "gauge",
+          value: providerBars.length,
+          tags: {
+            provider: "massive",
+            source: options.source,
+            symbol,
+            timeframe: RECOVERY_TIMEFRAME,
+          },
+        });
 
         if (providerBars.length > 0) {
           await this.store.upsertBars(symbol, RECOVERY_TIMEFRAME, providerBars);
+          await durableBarWriter.writeDurableBars(providerBars, "provider_rest");
           await this.redis.writeBarsForRecovery(providerBars);
         }
 
@@ -248,6 +308,51 @@ export class RecoveryService {
           checkpointAfter,
         });
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        await timescaleStore.recordProviderFetchOutcome({
+          outcomeId: `${options.source}:${symbol}:${window.startMs}:${window.endMs}:failed`,
+          provider: "massive",
+          source: options.source,
+          symbol,
+          timeframe: RECOVERY_TIMEFRAME,
+          status: "failed",
+          startMs: window.startMs,
+          endMs: window.endMs,
+          barCount: 0,
+          error: errorMessage,
+          metadata: {
+            runId: run.runId,
+            disconnectedAt: options.disconnectedAt ?? null,
+            excludeCurrentMinute: options.excludeCurrentMinute ?? false,
+          },
+        });
+        telemetry.metric({
+          name: "mk3.provider_fetch.outcome",
+          type: "counter",
+          value: 1,
+          tags: {
+            provider: "massive",
+            source: options.source,
+            symbol,
+            timeframe: RECOVERY_TIMEFRAME,
+            status: "failed",
+          },
+        });
+        captureExceptionWithContext(error, {
+          tags: {
+            component: "recovery-service",
+            run_id: run.runId,
+            symbol,
+            provider: "massive",
+            ingestion_source: "provider_rest",
+            recovery_source: options.source,
+          },
+          extra: {
+            startMs: window.startMs,
+            endMs: window.endMs,
+            timeframe: RECOVERY_TIMEFRAME,
+          },
+        });
         results.push({
           symbol,
           source: options.source,
@@ -256,10 +361,55 @@ export class RecoveryService {
           providerBars: 0,
           checkpointBefore: checkpoint?.lastSeenBarTs ?? null,
           checkpointAfter: checkpoint?.lastSeenBarTs ?? null,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage,
         });
       }
     }
+
+    const failedSymbols = results.filter((result) => result.error).length;
+    const providerBars = results.reduce(
+      (sum, result) => sum + result.providerBars,
+      0,
+    );
+    telemetry.metric({
+      name: "mk3.provider_fetch.run_symbols",
+      type: "gauge",
+      value: results.length,
+      tags: {
+        source: options.source,
+        status:
+          failedSymbols > 0
+            ? failedSymbols === results.length
+              ? "failed"
+              : "partial_success"
+            : "success",
+      },
+    });
+    await finishOperationalRun(
+      run,
+      failedSymbols > 0
+        ? failedSymbols === results.length
+          ? "failed"
+          : "partial_success"
+        : "success",
+      {
+        counts: {
+          symbols: results.length,
+          failedSymbols,
+          providerBars,
+        },
+        error:
+          failedSymbols > 0
+            ? results
+                .filter((result) => result.error)
+                .map((result) => `${result.symbol}: ${result.error}`)
+                .join("; ")
+            : null,
+        metadata: {
+          results,
+        },
+      },
+    );
 
     return results;
   }

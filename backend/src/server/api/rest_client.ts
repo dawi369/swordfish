@@ -22,6 +22,17 @@ import type { Server, ServerWebSocket } from "bun";
 import { logger } from "@/utils/logger.js";
 import { recoveryService } from "@/services/recovery_service.js";
 import { Sentry } from "@/utils/sentry.js";
+import { hotCacheRebuilder } from "@/services/hot_cache_rebuilder.js";
+import { marketDataRepository } from "@/services/market_data_repository.js";
+import type { DurableStoreStats } from "@/server/data/timescale_store.js";
+import type { StoredProviderFetchOutcomeRecord } from "@/server/data/timescale_store.js";
+import type { Bar } from "@/types/common.types.js";
+import type { StoredActiveContracts } from "@/types/contract.types.js";
+import {
+  finishOperationalRun,
+  startOperationalRun,
+} from "@/utils/operational_runs.js";
+import { telemetry } from "@/utils/telemetry.js";
 
 let massiveClient: MassiveWSClient | null = null;
 
@@ -134,6 +145,11 @@ const ADMIN_COMMANDS: AdminCommandDefinition[] = [
     description: "Current upstream and persisted subscription counts.",
   },
   {
+    id: "coverage",
+    label: "Coverage",
+    description: "Classifies subscribed, latest, and durable symbol coverage.",
+  },
+  {
     id: "front-months-summary",
     label: "Front months",
     description: "Front-month cache status by product.",
@@ -142,6 +158,16 @@ const ADMIN_COMMANDS: AdminCommandDefinition[] = [
     id: "recovery-checkpoints",
     label: "Recovery checkpoints",
     description: "Recovery checkpoint count and newest checkpoint age.",
+  },
+  {
+    id: "hot-cache-rebuild-dry-run",
+    label: "Hot cache dry run",
+    description: "Checks how many subscribed symbols could rebuild latest-week Redis cache from Timescale.",
+  },
+  {
+    id: "hot-cache-rebuild",
+    label: "Hot cache rebuild",
+    description: "Rebuilds latest-week Redis cache from durable 1m bars.",
   },
 ];
 
@@ -186,6 +212,153 @@ function summarizeAges(timestamps: Array<number | null | undefined>, now: number
   };
 }
 
+type SymbolCoverageStatus =
+  | "ok"
+  | "not_subscribed"
+  | "subscribed_no_live_data"
+  | "provider_no_data"
+  | "stale_contract"
+  | "backfill_pending";
+
+interface SymbolCoverageRow {
+  symbol: string;
+  status: SymbolCoverageStatus;
+  subscribed: boolean;
+  hasLatest: boolean;
+  hasDurableBars: boolean;
+  latestBarTs: number | null;
+  latestAgeMs: number | null;
+  durableLastBarTs: number | null;
+  durableAgeMs: number | null;
+  durableBarCount: number;
+  gapCount: number;
+  spikeCount: number;
+  providerStatus: "success" | "empty" | "failed" | null;
+  providerOutcomeAt: number | null;
+}
+
+function buildSymbolCoverage({
+  latestBars,
+  subscribedSymbols,
+  durableStats,
+  providerOutcomes,
+  activeContracts,
+  now,
+}: {
+  latestBars: Bar[];
+  subscribedSymbols: string[];
+  durableStats: DurableStoreStats;
+  providerOutcomes?: StoredProviderFetchOutcomeRecord[];
+  activeContracts?: Record<string, StoredActiveContracts>;
+  now: number;
+}) {
+  const latestBySymbol = new Map(latestBars.map((bar) => [bar.symbol, bar]));
+  const subscribed = new Set(subscribedSymbols);
+  const durableBySymbol = new Map(
+    durableStats.symbols.map((symbolStats) => [symbolStats.symbol, symbolStats]),
+  );
+  const latestProviderOutcomeBySymbol = new Map<string, StoredProviderFetchOutcomeRecord>();
+  for (const outcome of providerOutcomes ?? []) {
+    const existing = latestProviderOutcomeBySymbol.get(outcome.symbol);
+    if (!existing || outcome.createdAt > existing.createdAt) {
+      latestProviderOutcomeBySymbol.set(outcome.symbol, outcome);
+    }
+  }
+  const activeContractSymbols = new Set(
+    Object.values(activeContracts ?? {}).flatMap((contractSet) =>
+      contractSet.contracts.map((contract) => contract.ticker),
+    ),
+  );
+  const allSymbols = Array.from(
+    new Set([
+      ...subscribed,
+      ...latestBySymbol.keys(),
+      ...durableBySymbol.keys(),
+      ...latestProviderOutcomeBySymbol.keys(),
+    ]),
+  ).sort();
+  const staleLatestThresholdMs = 15 * 60 * 1000;
+
+  const symbols: SymbolCoverageRow[] = allSymbols.map((symbol) => {
+    const latest = latestBySymbol.get(symbol);
+    const durable = durableBySymbol.get(symbol);
+    const latestAge = ageMs(latest?.startTime ?? null, now);
+    const durableAge = ageMs(durable?.lastBarTs ?? null, now);
+    const isSubscribed = subscribed.has(symbol);
+    const hasLatest = Boolean(latest);
+    const hasDurableBars = Boolean(durable && durable.barCount > 0);
+    const providerOutcome = latestProviderOutcomeBySymbol.get(symbol);
+    const providerReturnedEmpty = providerOutcome?.status === "empty";
+    const activeContractKnown =
+      activeContractSymbols.size === 0 || activeContractSymbols.has(symbol);
+    const staleLatest =
+      hasLatest &&
+      latestAge !== null &&
+      latestAge > staleLatestThresholdMs;
+
+    let status: SymbolCoverageStatus = "ok";
+    if (staleLatest && (!isSubscribed || !activeContractKnown)) {
+      status = "stale_contract";
+    } else if (!isSubscribed) {
+      status = "not_subscribed";
+    } else if (!hasLatest && !hasDurableBars) {
+      status = providerReturnedEmpty ? "provider_no_data" : "backfill_pending";
+    } else if (!hasLatest) {
+      status = "subscribed_no_live_data";
+    } else if (staleLatest) {
+      status = "stale_contract";
+    } else if (!hasDurableBars && durableStats.enabled) {
+      status = "backfill_pending";
+    }
+
+    return {
+      symbol,
+      status,
+      subscribed: isSubscribed,
+      hasLatest,
+      hasDurableBars,
+      latestBarTs: latest?.startTime ?? null,
+      latestAgeMs: latestAge,
+      durableLastBarTs: durable?.lastBarTs ?? null,
+      durableAgeMs: durableAge,
+      durableBarCount: durable?.barCount ?? 0,
+      gapCount: durable?.gapCount ?? 0,
+      spikeCount: durable?.spikeCount ?? 0,
+      providerStatus: providerOutcome?.status ?? null,
+      providerOutcomeAt: providerOutcome?.createdAt ?? null,
+    };
+  });
+
+  const byStatus = symbols.reduce<Record<SymbolCoverageStatus, number>>(
+    (acc, row) => {
+      acc[row.status] += 1;
+      return acc;
+    },
+    {
+      ok: 0,
+      not_subscribed: 0,
+      subscribed_no_live_data: 0,
+      provider_no_data: 0,
+      stale_contract: 0,
+      backfill_pending: 0,
+    },
+  );
+
+  return {
+    summary: {
+      totalSymbols: symbols.length,
+      subscribedSymbols: subscribed.size,
+      latestSymbols: latestBySymbol.size,
+      durableSymbols: durableBySymbol.size,
+      staleSymbols: byStatus.stale_contract,
+      gapSymbols: symbols.filter((row) => row.gapCount > 0).length,
+      spikeSymbols: symbols.filter((row) => row.spikeCount > 0).length,
+      byStatus,
+    },
+    symbols,
+  };
+}
+
 function classifyJob(job: { status: { lastRunTime: number | null; lastSuccess: boolean; lastError: string | null } }) {
   if (!job.status.lastRunTime) return "not_run";
   if (job.status.lastSuccess) return "ok";
@@ -211,6 +384,12 @@ function buildJobState() {
       status: frontMonthJob.getStatus(),
     },
   } satisfies Record<AdminJobKey, unknown>;
+}
+
+function getCurrentSubscriptions() {
+  return typeof massiveClient?.getSubscriptions === "function"
+    ? massiveClient.getSubscriptions()
+    : [];
 }
 
 async function buildAdminOpsPayload() {
@@ -261,11 +440,27 @@ async function buildAdminOpsPayload() {
   const latestBarTimestamps = latestBars.map((bar) => bar.startTime);
   const newestBarTime = maxTimestamp(latestBarTimestamps);
   const oldestBarTime = minTimestamp(latestBarTimestamps);
+  const durableStats = await timescaleStore.getDurableStats(subscribedSymbols, {
+    startMs: now - ONE_WEEK_MS,
+    endMs: now,
+  });
+  const providerOutcomes = await timescaleStore.getProviderFetchOutcomes({
+    limit: 500,
+  });
+  const coverage = buildSymbolCoverage({
+    latestBars,
+    subscribedSymbols,
+    durableStats,
+    providerOutcomes,
+    activeContracts,
+    now,
+  });
   const latestSnapshotTime = maxTimestamp(snapshotTimestamps);
   const oldestSnapshotTime = minTimestamp(snapshotTimestamps);
   const latestActiveContractTime = maxTimestamp(activeContractTimestamps);
   const latestRecoveryCheckpointTime = maxTimestamp(recoveryTimestamps);
   const wsConnected = massiveClient?.isConnected() || false;
+  const currentSubscriptions = getCurrentSubscriptions();
   const servicesHealthy =
     redisOk && wsConnected && (!timescaleEnabled || timescaleOk);
   const jobs = buildJobState();
@@ -293,9 +488,34 @@ async function buildAdminOpsPayload() {
     ? "degraded"
     : failedJobs.length > 0
       ? "degraded"
+      : coverage.summary.staleSymbols > 0 || coverage.summary.spikeSymbols > 0
+        ? "degraded"
       : pendingJobs.length > 0
         ? "warming"
         : "ok";
+
+  telemetry.metric({
+    name: "mk3.admin_ops.status",
+    type: "gauge",
+    value: status === "ok" ? 1 : status === "warming" ? 0.5 : 0,
+    tags: {
+      status,
+      redis: redisOk,
+      timescale_enabled: timescaleEnabled,
+      timescale_connected: timescaleOk,
+      massive_ws: wsConnected,
+    },
+  });
+  telemetry.metric({
+    name: "mk3.data_coverage.stale_symbols",
+    type: "gauge",
+    value: coverage.summary.staleSymbols,
+  });
+  telemetry.metric({
+    name: "mk3.data_coverage.spike_symbols",
+    type: "gauge",
+    value: coverage.summary.spikeSymbols,
+  });
 
   return {
     status,
@@ -321,6 +541,8 @@ async function buildAdminOpsPayload() {
       usedMemoryBytes: redisStats.usedMemoryBytes,
       indexCounts: redisStats.indexCounts,
     },
+    durable: durableStats,
+    coverage,
     freshness: {
       latestBars: {
         newestTimestamp: newestBarTime,
@@ -356,11 +578,11 @@ async function buildAdminOpsPayload() {
       successfulJobs: Object.values(jobStates).filter((state) => state === "ok").length,
     },
     subscriptions: {
-      upstreamCount: massiveClient?.getSubscriptions().length ?? 0,
-      totalSymbols:
-        massiveClient
-          ?.getSubscriptions()
-          .reduce((sum, sub) => sum + sub.symbols.length, 0) ?? 0,
+      upstreamCount: currentSubscriptions.length,
+      totalSymbols: currentSubscriptions.reduce(
+        (sum, sub) => sum + sub.symbols.length,
+        0,
+      ),
       persistedSymbols: subscribedSymbols,
     },
     frontMonths: frontMonthJob.getCache(),
@@ -386,90 +608,174 @@ async function runAdminCommand(commandId: string) {
   }
 
   const startedAt = Date.now();
+  const auditRun = await startOperationalRun({
+    runType: "admin_action",
+    name: commandId,
+    trigger: "api",
+    metadata: {
+      command: definition,
+    },
+  });
   const ops = await buildAdminOpsPayload();
   let output: unknown;
-  let lines: string[];
+  let lines: string[] = [];
+  let status: "success" | "failed" = "success";
+  let auditError: string | null = null;
 
-  switch (commandId) {
-    case "health":
-      output = {
-        status: ops.status,
-        services: ops.services,
-        redis: {
-          date: ops.redis.date,
-          barCount: ops.redis.barCount,
-          symbolCount: ops.redis.symbolCount,
-        },
-        failedJobs: Object.values(ops.jobs)
-          .filter((job) => !(job as { status: { lastSuccess: boolean } }).status.lastSuccess)
-          .map((job) => (job as { label: string }).label),
-      };
-      lines = [
-        `status=${ops.status}`,
-        `redis=${ops.services.redis}`,
-        `massiveWs=${ops.services.massiveWs}`,
-        `symbols=${ops.redis.symbolCount}`,
-      ];
-      break;
-    case "redis-summary":
-      output = ops.redis;
-      lines = [
-        `date=${ops.redis.date}`,
-        `latestBars=${ops.redis.latestBarCount}`,
-        `snapshots=${ops.redis.snapshotCount}`,
-        `activeContractProducts=${ops.redis.activeContractProductCount}`,
-        `recoveryCheckpoints=${ops.redis.recoveryCheckpointCount}`,
-      ];
-      break;
-    case "jobs-status":
-      output = ops.jobs;
-      lines = Object.values(ops.jobs).map((job) => {
-        const typedJob = job as {
-          label: string;
-          scheduled: boolean;
-          status: { lastSuccess: boolean; totalRuns: number; lastError: string | null };
+  try {
+    switch (commandId) {
+      case "health":
+        output = {
+          status: ops.status,
+          services: ops.services,
+          redis: {
+            date: ops.redis.date,
+            barCount: ops.redis.barCount,
+            symbolCount: ops.redis.symbolCount,
+          },
+          failedJobs: Object.values(ops.jobs)
+            .filter((job) => !(job as { status: { lastSuccess: boolean } }).status.lastSuccess)
+            .map((job) => (job as { label: string }).label),
         };
-        return `${typedJob.label}: success=${typedJob.status.lastSuccess} runs=${typedJob.status.totalRuns} scheduled=${typedJob.scheduled} error=${typedJob.status.lastError ?? "none"}`;
-      });
-      break;
-    case "subscriptions":
-      output = ops.subscriptions;
-      lines = [
-        `upstreamSubscriptions=${ops.subscriptions.upstreamCount}`,
-        `upstreamSymbols=${ops.subscriptions.totalSymbols}`,
-        `persistedSymbols=${ops.subscriptions.persistedSymbols.length}`,
-      ];
-      break;
-    case "front-months-summary": {
-      const products = ops.frontMonths?.products ?? {};
-      output = {
-        lastUpdated: ops.frontMonths?.lastUpdated ?? null,
-        productCount: Object.keys(products).length,
-        products,
-      };
-      lines = [
-        `lastUpdated=${ops.frontMonths?.lastUpdated ?? "never"}`,
-        `products=${Object.keys(products).length}`,
-        ...Object.entries(products)
-          .slice(0, 20)
-          .map(([code, value]) => {
-            const frontMonth = (value as { frontMonth?: string }).frontMonth ?? "unknown";
-            return `${code}=${frontMonth}`;
-          }),
-      ];
-      break;
+        lines = [
+          `status=${ops.status}`,
+          `redis=${ops.services.redis}`,
+          `massiveWs=${ops.services.massiveWs}`,
+          `symbols=${ops.redis.symbolCount}`,
+        ];
+        break;
+      case "redis-summary":
+        output = ops.redis;
+        lines = [
+          `date=${ops.redis.date}`,
+          `latestBars=${ops.redis.latestBarCount}`,
+          `snapshots=${ops.redis.snapshotCount}`,
+          `activeContractProducts=${ops.redis.activeContractProductCount}`,
+          `recoveryCheckpoints=${ops.redis.recoveryCheckpointCount}`,
+        ];
+        break;
+      case "jobs-status":
+        output = ops.jobs;
+        lines = Object.values(ops.jobs).map((job) => {
+          const typedJob = job as {
+            label: string;
+            scheduled: boolean;
+            status: { lastSuccess: boolean; totalRuns: number; lastError: string | null };
+          };
+          return `${typedJob.label}: success=${typedJob.status.lastSuccess} runs=${typedJob.status.totalRuns} scheduled=${typedJob.scheduled} error=${typedJob.status.lastError ?? "none"}`;
+        });
+        break;
+      case "subscriptions":
+        output = ops.subscriptions;
+        lines = [
+          `upstreamSubscriptions=${ops.subscriptions.upstreamCount}`,
+          `upstreamSymbols=${ops.subscriptions.totalSymbols}`,
+          `persistedSymbols=${ops.subscriptions.persistedSymbols.length}`,
+        ];
+        break;
+      case "coverage":
+        output = ops.coverage;
+        lines = [
+          `totalSymbols=${ops.coverage.summary.totalSymbols}`,
+          `ok=${ops.coverage.summary.byStatus.ok}`,
+          `stale=${ops.coverage.summary.byStatus.stale_contract}`,
+          `providerNoData=${ops.coverage.summary.byStatus.provider_no_data}`,
+          `backfillPending=${ops.coverage.summary.byStatus.backfill_pending}`,
+          `gapSymbols=${ops.coverage.summary.gapSymbols}`,
+          `spikeSymbols=${ops.coverage.summary.spikeSymbols}`,
+        ];
+        break;
+      case "front-months-summary": {
+        const products = ops.frontMonths?.products ?? {};
+        output = {
+          lastUpdated: ops.frontMonths?.lastUpdated ?? null,
+          productCount: Object.keys(products).length,
+          products,
+        };
+        lines = [
+          `lastUpdated=${ops.frontMonths?.lastUpdated ?? "never"}`,
+          `products=${Object.keys(products).length}`,
+          ...Object.entries(products)
+            .slice(0, 20)
+            .map(([code, value]) => {
+              const frontMonth = (value as { frontMonth?: string }).frontMonth ?? "unknown";
+              return `${code}=${frontMonth}`;
+            }),
+        ];
+        break;
+      }
+      case "recovery-checkpoints":
+        output = ops.freshness.recoveryCheckpoints;
+        lines = [
+          `checkpoints=${ops.redis.recoveryCheckpointCount}`,
+          `newestTimestamp=${ops.freshness.recoveryCheckpoints.newestTimestamp ?? "never"}`,
+          `newestAgeMs=${ops.freshness.recoveryCheckpoints.newestAgeMs ?? "unknown"}`,
+        ];
+        break;
+      case "hot-cache-rebuild-dry-run": {
+        const result = await hotCacheRebuilder.rebuildLatestWindow(
+          ops.subscriptions.persistedSymbols,
+          {
+            dryRun: true,
+          },
+        );
+        output = result;
+        lines = [
+          `symbols=${result.symbols}`,
+          `hydratedSymbols=${result.hydratedSymbols}`,
+          `barsLoaded=${result.barsLoaded}`,
+          `skippedSymbols=${result.skippedSymbols.length}`,
+        ];
+        break;
+      }
+      case "hot-cache-rebuild": {
+        const result = await hotCacheRebuilder.rebuildLatestWindow(
+          ops.subscriptions.persistedSymbols,
+          {
+            dryRun: false,
+          },
+        );
+        output = result;
+        lines = [
+          `symbols=${result.symbols}`,
+          `hydratedSymbols=${result.hydratedSymbols}`,
+          `barsLoaded=${result.barsLoaded}`,
+          `skippedSymbols=${result.skippedSymbols.length}`,
+        ];
+        break;
+      }
+      default:
+        output = {};
+        lines = [];
     }
-    case "recovery-checkpoints":
-      output = ops.freshness.recoveryCheckpoints;
-      lines = [
-        `checkpoints=${ops.redis.recoveryCheckpointCount}`,
-        `newestTimestamp=${ops.freshness.recoveryCheckpoints.newestTimestamp ?? "never"}`,
-        `newestAgeMs=${ops.freshness.recoveryCheckpoints.newestAgeMs ?? "unknown"}`,
-      ];
-      break;
-    default:
-      output = {};
-      lines = [];
+  } catch (error) {
+    status = "failed";
+    auditError = error instanceof Error ? error.message : String(error);
+    output = {
+      error: auditError,
+    };
+    lines = [`error=${auditError}`];
+    throw error;
+  } finally {
+    await finishOperationalRun(auditRun, status, {
+      counts: {
+        lines: lines?.length ?? 0,
+      },
+      error: auditError,
+      metadata: {
+        commandId,
+        lines: lines ?? [],
+      },
+    });
+    telemetry.metric({
+      name: "mk3.admin_command.run",
+      type: "counter",
+      value: 1,
+      tags: {
+        command: commandId,
+        status,
+      },
+    });
   }
 
   const completedAt = Date.now();
@@ -498,6 +804,22 @@ function parseMsParam(value: string | null): number | null {
   if (!value) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseLimitParam(value: string | null, fallback = 100, max = 500): number {
+  if (!value) return fallback;
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, max);
+}
+
+function parseCsvParam(value: string | null): string[] {
+  return (
+    value
+      ?.split(",")
+      .map((item) => item.trim())
+      .filter(Boolean) ?? []
+  );
 }
 
 function isOriginAllowed(origin: string | null): boolean {
@@ -829,8 +1151,8 @@ export async function handleRequest(
       return fail("start and end query params are required (ms)", 400);
     }
 
-    const bars = await redisStore.getBarsRange(symbol, start, end, tf as any);
-    return respond({ symbol, tf, start, end, bars, count: bars.length });
+    const range = await marketDataRepository.getBarsRange(symbol, start, end, tf);
+    return respond({ ...range, count: range.bars.length });
   }
 
 
@@ -928,55 +1250,22 @@ export async function handleRequest(
     }
 
     if (method === "GET" && path === "/admin/health") {
-      let redisOk = false;
-      let timescaleOk = false;
-      const timescaleEnabled = timescaleStore.isEnabled;
-
-      try {
-        const pong = await redisStore.ping();
-        redisOk = pong === "PONG";
-      } catch {
-        redisOk = false;
-      }
-
-      if (timescaleEnabled) {
-        try {
-          timescaleOk = await timescaleStore.ping();
-        } catch {
-          timescaleOk = false;
-        }
-      }
-
-      const redisStats = await redisStore.getStats();
-      const symbols = await redisStore.getSymbols();
-      const recoveryCheckpoints = await redisStore.getAllRecoveryCheckpoints();
-      const clearJobStatus = dailyClearJob.getStatus();
-      const refreshJobStatus = monthlySubscriptionJob.getStatus();
-      const wsConnected = massiveClient?.isConnected() || false;
-      const allHealthy =
-        redisOk && wsConnected && (!timescaleEnabled || timescaleOk);
-      const status = allHealthy ? "ok" : "degraded";
+      const ops = await buildAdminOpsPayload();
 
       return respond({
-        status,
-        timestamp: Date.now(),
-        services: {
-          redis: redisOk ? "connected" : "disconnected",
-          timescaledb: timescaleEnabled
-            ? timescaleOk
-              ? "connected"
-              : "disconnected"
-            : "disabled",
-          massiveWs: wsConnected ? "connected" : "disconnected",
-        },
-        symbols,
-        symbolCount: redisStats.symbolCount,
-        redis: redisStats,
+        status: ops.status,
+        timestamp: ops.timestamp,
+        services: ops.services,
+        symbols: ops.coverage.symbols.map((symbol) => symbol.symbol),
+        symbolCount: ops.redis.symbolCount,
+        redis: ops.redis,
+        durable: ops.durable,
+        coverage: ops.coverage,
         recovery: {
-          checkpointCount: Object.keys(recoveryCheckpoints).length,
+          checkpointCount: ops.redis.recoveryCheckpointCount,
         },
-        dailyClearJob: clearJobStatus,
-        subscriptionRefreshJob: refreshJobStatus,
+        dailyClearJob: dailyClearJob.getStatus(),
+        subscriptionRefreshJob: monthlySubscriptionJob.getStatus(),
         snapshotRefreshJob: snapshotJob.getStatus(),
         frontMonthRefreshJob: frontMonthJob.getStatus(),
       });
@@ -993,6 +1282,129 @@ export async function handleRequest(
         });
         throw err;
       }
+    }
+
+    if (method === "GET" && path === "/admin/coverage") {
+      const ops = await buildAdminOpsPayload();
+      return respond(ops.coverage);
+    }
+
+    if (method === "GET" && path === "/admin/durable/symbols") {
+      const limit = parseLimitParam(url.searchParams.get("limit"));
+      const symbols = await timescaleStore.getRecentDurableSymbols(limit);
+      return respond({ symbols, count: symbols.length });
+    }
+
+    if (method === "GET" && path === "/admin/durable/bars/latest") {
+      const limit = parseLimitParam(url.searchParams.get("limit"));
+      const symbols = parseCsvParam(url.searchParams.get("symbols"));
+      const source = url.searchParams.get("source")?.trim() as
+        | "live_ws"
+        | "provider_rest"
+        | "flat_file"
+        | "recovery"
+        | undefined;
+
+      if (source && !["live_ws", "provider_rest", "flat_file", "recovery"].includes(source)) {
+        return fail("Invalid durable bar source", 400);
+      }
+
+      const bars = await timescaleStore.getLatestDurableBars(symbols, limit, source);
+      return respond({ bars, count: bars.length });
+    }
+
+    if (method === "GET" && path === "/admin/durable/provider-outcomes") {
+      const limit = parseLimitParam(url.searchParams.get("limit"));
+      const symbol = url.searchParams.get("symbol")?.trim() || undefined;
+      const status = url.searchParams.get("status")?.trim() as
+        | "success"
+        | "empty"
+        | "failed"
+        | undefined;
+
+      if (status && !["success", "empty", "failed"].includes(status)) {
+        return fail("Invalid provider outcome status", 400);
+      }
+
+      const outcomes = await timescaleStore.getProviderFetchOutcomes({
+        symbol,
+        status,
+        limit,
+      });
+      return respond({ outcomes, count: outcomes.length });
+    }
+
+    if (method === "GET" && path === "/admin/durable/operational-runs") {
+      const limit = parseLimitParam(url.searchParams.get("limit"));
+      const runType = url.searchParams.get("runType")?.trim() || undefined;
+      const status = url.searchParams.get("status")?.trim() || undefined;
+      const runs = await timescaleStore.getOperationalRuns({
+        runType,
+        status,
+        limit,
+      });
+      return respond({ runs, count: runs.length });
+    }
+
+    if (method === "GET" && path === "/admin/durable/ingestion-runs") {
+      const limit = parseLimitParam(url.searchParams.get("limit"));
+      const source = url.searchParams.get("source")?.trim() as
+        | "provider_rest"
+        | "flat_file"
+        | "recovery"
+        | undefined;
+      const status = url.searchParams.get("status")?.trim() as
+        | "started"
+        | "success"
+        | "failed"
+        | undefined;
+
+      if (source && !["provider_rest", "flat_file", "recovery"].includes(source)) {
+        return fail("Invalid ingestion source", 400);
+      }
+      if (status && !["started", "success", "failed"].includes(status)) {
+        return fail("Invalid ingestion status", 400);
+      }
+
+      const runs = await timescaleStore.getIngestionRuns({
+        source,
+        status,
+        limit,
+      });
+      return respond({ runs, count: runs.length });
+    }
+
+    const qualityMatch = path.match(/^\/admin\/durable\/quality\/([^\/]+)$/);
+    if (method === "GET" && qualityMatch) {
+      const symbol = qualityMatch[1];
+      if (!symbol) return fail("Invalid symbol", 400);
+
+      const start = parseMsParam(url.searchParams.get("start"));
+      const end = parseMsParam(url.searchParams.get("end"));
+      const gapThresholdMs = parseMsParam(url.searchParams.get("gapThresholdMs")) ?? undefined;
+      const spikeThresholdPct = url.searchParams.get("spikeThresholdPct")
+        ? Number(url.searchParams.get("spikeThresholdPct"))
+        : undefined;
+
+      if (start === null || end === null) {
+        return fail("start and end query params are required (ms)", 400);
+      }
+      if (
+        spikeThresholdPct !== undefined &&
+        (!Number.isFinite(spikeThresholdPct) || spikeThresholdPct <= 0)
+      ) {
+        return fail("Invalid spikeThresholdPct", 400);
+      }
+
+      const quality = await timescaleStore.getDurableQualitySummary(symbol, start, end, {
+        gapThresholdMs,
+        spikeThresholdPct,
+        recordSummary: true,
+        metadata: {
+          route: "/admin/durable/quality/:symbol",
+        },
+      });
+      return respond(quality);
     }
 
     if (method === "GET" && path === "/admin/commands") {
@@ -1082,14 +1494,14 @@ export async function handleRequest(
 
     if (method === "POST" && path === "/admin/clear-redis") {
       // Manual clear always uses force=true to bypass daily check
-      await dailyClearJob.runClear(true);
+      await dailyClearJob.runClear(true, "manual");
       const status = dailyClearJob.getStatus();
       return respond({ message: "Manual clear triggered", status });
     }
 
     if (method === "POST" && path === "/admin/refresh-subscriptions") {
       try {
-        await monthlySubscriptionJob.runRefresh();
+        await monthlySubscriptionJob.runRefresh("manual");
         const status = monthlySubscriptionJob.getStatus();
         return respond({
           message: "Manual subscription refresh triggered",
@@ -1124,7 +1536,7 @@ export async function handleRequest(
 
     if (method === "POST" && path === "/admin/refresh-front-months") {
       // Run in background to prevent timeout
-      frontMonthJob.runRefresh().catch((err) => {
+      frontMonthJob.runRefresh("manual").catch((err) => {
         console.error("[FrontMonthJob] Background refresh failed:", err);
       });
 
@@ -1137,7 +1549,7 @@ export async function handleRequest(
 
     if (method === "POST" && path === "/admin/refresh-snapshots") {
       // Run job in background (don't await) - prevents HTTP timeout
-      snapshotJob.runRefresh().catch((err) => {
+      snapshotJob.runRefresh("manual").catch((err) => {
         console.error("[SnapshotJob] Background refresh failed:", err);
       });
 
@@ -1159,6 +1571,22 @@ export async function handleRequest(
         symbols,
         results,
         providerBars: results.reduce((sum, result) => sum + result.providerBars, 0),
+      });
+    }
+
+    if (method === "POST" && path === "/admin/hot-cache/rebuild") {
+      const dryRun = url.searchParams.get("dryRun") !== "false";
+      const symbols = await redisStore.getSubscribedSymbols();
+      const result = await hotCacheRebuilder.rebuildLatestWindow(symbols, {
+        dryRun,
+      });
+
+      return respond({
+        message: dryRun
+          ? "Hot-cache rebuild dry run completed"
+          : "Hot-cache rebuild completed",
+        dryRun,
+        result,
       });
     }
   }

@@ -1,4 +1,5 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
+import { durableBarWriter } from "@/services/durable_bar_writer.js";
 import { RecoveryService } from "@/services/recovery_service.js";
 import type { Bar } from "@/types/common.types.js";
 import {
@@ -7,6 +8,7 @@ import {
   RECOVERY_RETENTION_MS,
   RECOVERY_TIMEFRAME,
 } from "@/types/recovery.types.js";
+import { telemetry } from "@/utils/telemetry.js";
 
 describe("RecoveryService", () => {
   const recoveryService = new RecoveryService(
@@ -197,6 +199,12 @@ describe("RecoveryService", () => {
     const persisted: Bar[][] = [];
     const redisWrites: Bar[][] = [];
     const checkpoints: number[] = [];
+    const durableSpy = spyOn(durableBarWriter, "writeDurableBars").mockResolvedValue({
+      source: "provider_rest",
+      bars: 1,
+      durable: "ok",
+    });
+    const metricSpy = spyOn(telemetry, "metric").mockImplementation(() => {});
 
     const service = new RecoveryService(
       {
@@ -244,10 +252,14 @@ describe("RecoveryService", () => {
       expect(results).toHaveLength(1);
       expect(results[0]?.providerBars).toBe(1);
       expect(persisted).toHaveLength(1);
+      expect(durableSpy).toHaveBeenCalledWith(providerBars, "provider_rest");
       expect(redisWrites).toHaveLength(1);
       expect(checkpoints.at(-1)).toBe(providerBars[0]?.startTime);
+      expect(metricSpy.mock.calls.some((call) => call[0].name === "mk3.provider_fetch.outcome")).toBe(true);
+      expect(metricSpy.mock.calls.some((call) => call[0].name === "mk3.provider_fetch.bars")).toBe(true);
     } finally {
       dateNowSpy.mockRestore();
+      mock.restore();
     }
   });
 });

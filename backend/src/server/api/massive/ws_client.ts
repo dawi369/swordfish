@@ -13,13 +13,12 @@ import {
   isTradeEvent,
   aggregateToBar,
 } from "@/utils/massive.utils.js";
-import { redisStore } from "@/server/data/redis_store.js";
-import { timescaleStore } from "@/server/data/timescale_store.js";
 import { MassiveAggregateEventSchema } from "@/schemas/events.js";
 import { ConnectionState } from "@/types/massive.types.js";
 import type { WSHealth } from "@/types/massive.types.js";
 import { isMarketHours } from "@/utils/massive.utils.js";
 import { recoveryService } from "@/services/recovery_service.js";
+import { marketDataWriter } from "@/services/market_data_writer.js";
 import type { Bar } from "@/types/common.types.js";
 
 // Timeout configuration (ms)
@@ -580,20 +579,16 @@ export class MassiveWSClient {
   }
 
   private async persistAggregateBar(bar: Bar): Promise<void> {
-    const operations = await Promise.allSettled([
-      redisStore.writeBar(bar),
-      recoveryService.persistLiveBar(bar),
-      timescaleStore.insertBar(bar),
-    ]);
+    const result = await marketDataWriter.writeLiveBar(bar);
 
-    if (operations[0]?.status === "rejected") {
-      console.error("Redis write failed:", operations[0].reason);
+    if (result.errors.redis) {
+      console.error("Redis write failed:", result.errors.redis);
     }
-    if (operations[1]?.status === "rejected") {
-      console.error("Recovery store write failed:", operations[1].reason);
+    if (result.errors.recovery) {
+      console.error("Recovery store write failed:", result.errors.recovery);
     }
-    if (operations[2]?.status === "rejected") {
-      console.error("TimescaleDB write failed:", operations[2].reason);
+    if (result.errors.durable) {
+      console.error("Durable bar write failed:", result.errors.durable);
     }
   }
 

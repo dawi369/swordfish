@@ -4,6 +4,8 @@ import { frontMonthJob } from "@/jobs/front_month_job.js";
 import { monthlySubscriptionJob } from "@/jobs/refresh_subscriptions.js";
 import { snapshotJob } from "@/jobs/snapshot_job.js";
 import { redisStore } from "@/server/data/redis_store.js";
+import { timescaleStore } from "@/server/data/timescale_store.js";
+import { hotCacheRebuilder } from "@/services/hot_cache_rebuilder.js";
 import {
   initializeJobRuntime,
   shouldBootstrapDailyJob,
@@ -82,6 +84,7 @@ describe("job runtime", () => {
       enableScheduledJobs: true,
       bootstrapFrontMonthsOnStartup: true,
       bootstrapSnapshotsOnStartup: true,
+      rebuildHotCacheOnStartup: false,
       now: () => Date.parse("2026-04-03T15:00:00.000Z"),
     });
 
@@ -161,6 +164,7 @@ describe("job runtime", () => {
       enableScheduledJobs: false,
       bootstrapFrontMonthsOnStartup: true,
       bootstrapSnapshotsOnStartup: true,
+      rebuildHotCacheOnStartup: false,
       now: () => now,
     });
 
@@ -170,6 +174,78 @@ describe("job runtime", () => {
     expect(refreshScheduleSpy).not.toHaveBeenCalled();
     expect(snapshotScheduleSpy).not.toHaveBeenCalled();
     expect(frontMonthScheduleSpy).not.toHaveBeenCalled();
+  });
+
+  test("can rebuild Redis hot cache from durable bars on startup", async () => {
+    const now = Date.parse("2026-04-03T15:00:00.000Z");
+    const wsClient = { name: "fake-client" } as any;
+
+    spyOn(monthlySubscriptionJob, "attachClient").mockImplementation(() => {});
+    spyOn(dailyClearJob, "loadStatus").mockResolvedValue();
+    spyOn(monthlySubscriptionJob, "loadStatus").mockResolvedValue();
+    spyOn(frontMonthJob, "loadStatus").mockResolvedValue();
+    spyOn(snapshotJob, "loadStatus").mockResolvedValue();
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue(["ESH6", "NQH6"]);
+    const rebuildSpy = spyOn(
+      hotCacheRebuilder,
+      "rebuildLatestWindow",
+    ).mockResolvedValue({
+      symbols: 2,
+      hydratedSymbols: 1,
+      barsLoaded: 120,
+      skippedSymbols: ["NQH6"],
+    });
+    const operationalRunSpy = spyOn(
+      timescaleStore,
+      "recordOperationalRun",
+    ).mockResolvedValue(true);
+
+    await initializeJobRuntime(wsClient, {
+      enableScheduledJobs: false,
+      bootstrapFrontMonthsOnStartup: false,
+      bootstrapSnapshotsOnStartup: false,
+      rebuildHotCacheOnStartup: true,
+      now: () => now,
+    });
+
+    expect(rebuildSpy).toHaveBeenCalledWith(["ESH6", "NQH6"], {
+      dryRun: false,
+      nowMs: now,
+    });
+    expect(operationalRunSpy).toHaveBeenCalledTimes(2);
+    expect(operationalRunSpy.mock.calls[1]?.[0].status).toBe("success");
+    expect(operationalRunSpy.mock.calls[1]?.[0].counts?.barsLoaded).toBe(120);
+  });
+
+  test("does not block startup when hot-cache rebuild fails", async () => {
+    const wsClient = { name: "fake-client" } as any;
+
+    spyOn(monthlySubscriptionJob, "attachClient").mockImplementation(() => {});
+    spyOn(dailyClearJob, "loadStatus").mockResolvedValue();
+    spyOn(monthlySubscriptionJob, "loadStatus").mockResolvedValue();
+    spyOn(frontMonthJob, "loadStatus").mockResolvedValue();
+    spyOn(snapshotJob, "loadStatus").mockResolvedValue();
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue(["ESH6"]);
+    spyOn(hotCacheRebuilder, "rebuildLatestWindow").mockRejectedValue(
+      new Error("durable unavailable"),
+    );
+    spyOn(console, "error").mockImplementation(() => {});
+    const operationalRunSpy = spyOn(
+      timescaleStore,
+      "recordOperationalRun",
+    ).mockResolvedValue(true);
+
+    await initializeJobRuntime(wsClient, {
+      enableScheduledJobs: false,
+      bootstrapFrontMonthsOnStartup: false,
+      bootstrapSnapshotsOnStartup: false,
+      rebuildHotCacheOnStartup: true,
+      now: () => Date.parse("2026-04-03T15:00:00.000Z"),
+    });
+
+    expect(operationalRunSpy).toHaveBeenCalledTimes(2);
+    expect(operationalRunSpy.mock.calls[1]?.[0].status).toBe("failed");
+    expect(operationalRunSpy.mock.calls[1]?.[0].error).toBe("durable unavailable");
   });
 
   test("stops all recurring schedules", () => {
