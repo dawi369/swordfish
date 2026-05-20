@@ -1,8 +1,7 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { MassiveWSClient } from "@/server/api/massive/ws_client.js";
-import { redisStore } from "@/server/data/redis_store.js";
-import { timescaleStore } from "@/server/data/timescale_store.js";
 import { recoveryService } from "@/services/recovery_service.js";
+import { marketDataWriter } from "@/services/market_data_writer.js";
 import * as massiveUtils from "@/utils/massive.utils.js";
 import type { Bar } from "@/types/common.types.js";
 
@@ -79,16 +78,17 @@ describe("MassiveWSClient", () => {
   test("buffers aggregate bars while recovery is in progress", () => {
     const client = new MassiveWSClient();
     (client as any).recoveryPhase = "buffering";
-    const redisSpy = spyOn(redisStore, "writeBar").mockResolvedValue();
-    const recoverySpy = spyOn(recoveryService, "persistLiveBar").mockResolvedValue();
-    const timescaleSpy = spyOn(timescaleStore, "insertBar").mockResolvedValue();
+    const writerSpy = spyOn(marketDataWriter, "writeLiveBar").mockResolvedValue({
+      redis: "ok",
+      recovery: "ok",
+      durable: "disabled",
+      errors: {},
+    });
 
     (client as any).handleAggregateBar(createBar("ESH9", 1000));
 
     expect((client as any).recoveryBuffer).toHaveLength(1);
-    expect(redisSpy).not.toHaveBeenCalled();
-    expect(recoverySpy).not.toHaveBeenCalled();
-    expect(timescaleSpy).not.toHaveBeenCalled();
+    expect(writerSpy).not.toHaveBeenCalled();
   });
 
   test("flushes buffered bars in sorted unique order", async () => {

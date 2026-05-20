@@ -2,6 +2,8 @@ import { describe, test, expect, beforeAll, afterAll, mock, spyOn } from "bun:te
 import { redisStore } from "@/server/data/redis_store.js";
 import type { Bar } from "@/types/common.types.js";
 
+const runRedisTests = Bun.env.RUN_REDIS_TESTS === "1";
+
 async function ensureRedisAvailable(): Promise<void> {
   try {
     const pong = await redisStore.redis.ping();
@@ -50,7 +52,7 @@ async function ensureRedisAvailable(): Promise<void> {
  * Run with: bun test src/tests/redis_store.test.ts
  */
 
-describe("RedisStore", () => {
+describe.skipIf(!runRedisTests)("RedisStore", () => {
   const testSymbol = "ESZ8";
 
   beforeAll(async () => {

@@ -7,6 +7,8 @@ import {
 import { redisStore } from "@/server/data/redis_store.js";
 import { timescaleStore } from "@/server/data/timescale_store.js";
 import { recoveryService } from "@/services/recovery_service.js";
+import { hotCacheRebuilder } from "@/services/hot_cache_rebuilder.js";
+import { marketDataRepository } from "@/services/market_data_repository.js";
 import { frontMonthJob } from "@/jobs/front_month_job.js";
 import { monthlySubscriptionJob } from "@/jobs/refresh_subscriptions.js";
 
@@ -42,6 +44,45 @@ describe("REST request handler", () => {
     } as any);
     spyOn(redisStore, "getSymbols").mockResolvedValue(["ESH6", "NQH6"]);
     spyOn(timescaleStore, "ping").mockResolvedValue(true);
+    spyOn(timescaleStore, "getDurableStats").mockResolvedValue({
+      enabled: false,
+      connected: false,
+      timescaleAvailable: false,
+      bars1m: {
+        symbolCount: 0,
+        barCount: 0,
+        oldestBarTs: null,
+        newestBarTs: null,
+      },
+      symbols: [],
+    });
+    spyOn(redisStore, "getAllLatestArray").mockResolvedValue([
+      {
+        symbol: "ESH6",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: Date.now(),
+        endTime: Date.now() + 60_000,
+      },
+      {
+        symbol: "NQH6",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: Date.now(),
+        endTime: Date.now() + 60_000,
+      },
+    ]);
+    spyOn(redisStore, "getAllSnapshots").mockResolvedValue({});
+    spyOn(redisStore, "getAllActiveContracts").mockResolvedValue({});
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue(["ESH6", "NQH6"]);
     spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({
       "1m:ESH6": { symbol: "ESH6" },
       "1m:NQH6": { symbol: "NQH6" },
@@ -75,6 +116,45 @@ describe("REST request handler", () => {
     } as any);
     spyOn(redisStore, "getSymbols").mockResolvedValue(["ESH6", "NQH6"]);
     spyOn(timescaleStore, "ping").mockResolvedValue(true);
+    spyOn(timescaleStore, "getDurableStats").mockResolvedValue({
+      enabled: false,
+      connected: false,
+      timescaleAvailable: false,
+      bars1m: {
+        symbolCount: 0,
+        barCount: 0,
+        oldestBarTs: null,
+        newestBarTs: null,
+      },
+      symbols: [],
+    });
+    spyOn(redisStore, "getAllLatestArray").mockResolvedValue([
+      {
+        symbol: "ESH6",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: Date.now(),
+        endTime: Date.now() + 60_000,
+      },
+      {
+        symbol: "NQH6",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: Date.now(),
+        endTime: Date.now() + 60_000,
+      },
+    ]);
+    spyOn(redisStore, "getAllSnapshots").mockResolvedValue({});
+    spyOn(redisStore, "getAllActiveContracts").mockResolvedValue({});
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue(["ESH6", "NQH6"]);
     spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({
       "1m:ESH6": { symbol: "ESH6" },
       "1m:NQH6": { symbol: "NQH6" },
@@ -90,9 +170,10 @@ describe("REST request handler", () => {
     const payload = (await response.json()) as any;
 
     expect(response.status).toBe(200);
-    expect(payload.status).toBe("ok");
+    expect(payload.status).toBe("warming");
     expect(payload.recovery.checkpointCount).toBe(2);
     expect(payload.symbols).toEqual(["ESH6", "NQH6"]);
+    expect(payload.coverage.summary.byStatus.ok).toBe(2);
   });
 
   test("returns consolidated admin ops status when authorized", async () => {
@@ -155,6 +236,596 @@ describe("REST request handler", () => {
     expect(payload.redis.snapshotCount).toBe(1);
     expect(payload.jobs.snapshotRefresh.id).toBe("snapshot-refresh");
     expect(payload.subscriptions.totalSymbols).toBe(2);
+  });
+
+  test("uses provider outcomes to distinguish no-data from pending backfill", async () => {
+    setMassiveClientForTesting({
+      isConnected: () => true,
+      getSubscriptions: () => [],
+    } as any);
+
+    spyOn(redisStore, "ping").mockResolvedValue("PONG");
+    spyOn(redisStore, "getStats").mockResolvedValue({
+      date: "2026-03-25",
+      barCount: 0,
+      symbolCount: 0,
+    } as any);
+    spyOn(timescaleStore, "ping").mockResolvedValue(true);
+    spyOn(redisStore, "getAllLatestArray").mockResolvedValue([]);
+    spyOn(redisStore, "getAllSnapshots").mockResolvedValue({});
+    spyOn(redisStore, "getAllActiveContracts").mockResolvedValue({});
+    spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({});
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue(["ESH6", "NQH6"]);
+    spyOn(timescaleStore, "getDurableStats").mockResolvedValue({
+      enabled: true,
+      connected: true,
+      timescaleAvailable: false,
+      bars1m: {
+        symbolCount: 0,
+        barCount: 0,
+        oldestBarTs: null,
+        newestBarTs: null,
+      },
+      symbols: [],
+    });
+    spyOn(timescaleStore, "getProviderFetchOutcomes").mockResolvedValue([
+      {
+        outcomeId: "provider:ESH6:1",
+        provider: "massive",
+        source: "provider_rest",
+        symbol: "ESH6",
+        timeframe: "1m",
+        status: "empty",
+        startMs: 1,
+        endMs: 2,
+        barCount: 0,
+        error: null,
+        metadata: {},
+        createdAt: 3,
+      },
+    ]);
+
+    const response = await handleRequest(
+      "GET",
+      "/admin/coverage",
+      createRequest("/admin/coverage", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const payload = (await response.json()) as any;
+
+    expect(response.status).toBe(200);
+    expect(payload.summary.byStatus.provider_no_data).toBe(1);
+    expect(payload.summary.byStatus.backfill_pending).toBe(1);
+    expect(payload.symbols.find((row: any) => row.symbol === "ESH6").providerStatus).toBe(
+      "empty",
+    );
+  });
+
+  test("classifies stale latest bars outside active contracts", async () => {
+    setMassiveClientForTesting({
+      isConnected: () => true,
+      getSubscriptions: () => [],
+    } as any);
+
+    spyOn(redisStore, "ping").mockResolvedValue("PONG");
+    spyOn(redisStore, "getStats").mockResolvedValue({
+      date: "2026-03-25",
+      barCount: 1,
+      symbolCount: 1,
+    } as any);
+    spyOn(timescaleStore, "ping").mockResolvedValue(true);
+    spyOn(redisStore, "getAllLatestArray").mockResolvedValue([
+      {
+        symbol: "ESZ1",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: 1,
+        endTime: 60_001,
+      },
+    ]);
+    spyOn(redisStore, "getAllSnapshots").mockResolvedValue({});
+    spyOn(redisStore, "getAllActiveContracts").mockResolvedValue({
+      ES: {
+        productCode: "ES",
+        updatedAt: Date.now(),
+        contracts: [{ ticker: "ESH6", productCode: "ES", lastTradeDate: "2026-03-20", active: true }],
+      },
+    } as any);
+    spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({});
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue([]);
+    spyOn(timescaleStore, "getDurableStats").mockResolvedValue({
+      enabled: true,
+      connected: true,
+      timescaleAvailable: false,
+      bars1m: {
+        symbolCount: 0,
+        barCount: 0,
+        oldestBarTs: null,
+        newestBarTs: null,
+      },
+      symbols: [],
+    });
+    spyOn(timescaleStore, "getProviderFetchOutcomes").mockResolvedValue([]);
+
+    const response = await handleRequest(
+      "GET",
+      "/admin/coverage",
+      createRequest("/admin/coverage", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const payload = (await response.json()) as any;
+
+    expect(response.status).toBe(200);
+    expect(payload.summary.byStatus.stale_contract).toBe(1);
+    expect(payload.symbols[0].status).toBe("stale_contract");
+  });
+
+  test("classifies every coverage status deterministically", async () => {
+    setMassiveClientForTesting({
+      isConnected: () => true,
+      getSubscriptions: () => [],
+    } as any);
+
+    const now = Date.now();
+    spyOn(redisStore, "ping").mockResolvedValue("PONG");
+    spyOn(redisStore, "getStats").mockResolvedValue({
+      date: "2026-03-25",
+      barCount: 3,
+      symbolCount: 6,
+    } as any);
+    spyOn(timescaleStore, "ping").mockResolvedValue(true);
+    spyOn(redisStore, "getAllLatestArray").mockResolvedValue([
+      {
+        symbol: "OKM6",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: now,
+        endTime: now + 60_000,
+      },
+      {
+        symbol: "OLDM6",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: now - 60 * 60 * 1000,
+        endTime: now - 59 * 60 * 1000,
+      },
+      {
+        symbol: "UNSUBM6",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: now,
+        endTime: now + 60_000,
+      },
+    ]);
+    spyOn(redisStore, "getAllSnapshots").mockResolvedValue({});
+    spyOn(redisStore, "getAllActiveContracts").mockResolvedValue({
+      OK: {
+        productCode: "OK",
+        updatedAt: now,
+        contracts: [
+          { ticker: "OKM6", productCode: "OK", lastTradeDate: "2026-06-19", active: true },
+        ],
+      },
+      OLD: {
+        productCode: "OLD",
+        updatedAt: now,
+        contracts: [
+          { ticker: "CURRENTM6", productCode: "OLD", lastTradeDate: "2026-06-19", active: true },
+        ],
+      },
+    } as any);
+    spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({});
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue([
+      "OKM6",
+      "NOLIVEM6",
+      "EMPTYM6",
+      "PENDINGM6",
+      "OLDM6",
+    ]);
+    spyOn(timescaleStore, "getDurableStats").mockResolvedValue({
+      enabled: true,
+      connected: true,
+      timescaleAvailable: false,
+      bars1m: {
+        symbolCount: 2,
+        barCount: 20,
+        oldestBarTs: now - 60 * 60 * 1000,
+        newestBarTs: now,
+      },
+      symbols: [
+        {
+          symbol: "OKM6",
+          barCount: 10,
+          firstBarTs: now - 10 * 60_000,
+          lastBarTs: now,
+          gapCount: 0,
+          spikeCount: 0,
+        },
+        {
+          symbol: "NOLIVEM6",
+          barCount: 10,
+          firstBarTs: now - 10 * 60_000,
+          lastBarTs: now,
+          gapCount: 0,
+          spikeCount: 0,
+        },
+      ],
+    });
+    spyOn(timescaleStore, "getProviderFetchOutcomes").mockResolvedValue([
+      {
+        outcomeId: "provider:EMPTYM6:1",
+        provider: "massive",
+        source: "provider_rest",
+        symbol: "EMPTYM6",
+        timeframe: "1m",
+        status: "empty",
+        startMs: 1,
+        endMs: 2,
+        barCount: 0,
+        error: null,
+        metadata: {},
+        createdAt: 3,
+      },
+    ]);
+
+    const response = await handleRequest(
+      "GET",
+      "/admin/coverage",
+      createRequest("/admin/coverage", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const payload = (await response.json()) as any;
+    const statuses = Object.fromEntries(
+      payload.symbols.map((row: any) => [row.symbol, row.status]),
+    );
+
+    expect(response.status).toBe(200);
+    expect(statuses.OKM6).toBe("ok");
+    expect(statuses.UNSUBM6).toBe("not_subscribed");
+    expect(statuses.NOLIVEM6).toBe("subscribed_no_live_data");
+    expect(statuses.EMPTYM6).toBe("provider_no_data");
+    expect(statuses.PENDINGM6).toBe("backfill_pending");
+    expect(statuses.OLDM6).toBe("stale_contract");
+    expect(payload.summary.byStatus.ok).toBe(1);
+    expect(payload.summary.byStatus.not_subscribed).toBe(1);
+    expect(payload.summary.byStatus.subscribed_no_live_data).toBe(1);
+    expect(payload.summary.byStatus.provider_no_data).toBe(1);
+    expect(payload.summary.byStatus.backfill_pending).toBe(1);
+    expect(payload.summary.byStatus.stale_contract).toBe(1);
+  });
+
+  test("returns durable inspection endpoints when authorized", async () => {
+    spyOn(timescaleStore, "getRecentDurableSymbols").mockResolvedValue([
+      {
+        symbol: "ESH6",
+        barCount: 120,
+        firstBarTs: 1_774_400_000_000,
+        lastBarTs: 1_774_407_200_000,
+        gapCount: 1,
+        spikeCount: 0,
+      },
+    ]);
+    const latestBarsSpy = spyOn(timescaleStore, "getLatestDurableBars").mockResolvedValue([
+      {
+        symbol: "ESH6",
+        open: 1,
+        high: 2,
+        low: 1,
+        close: 2,
+        volume: 100,
+        trades: 10,
+        startTime: 1_774_407_200_000,
+        endTime: 1_774_407_260_000,
+        source: "live_ws",
+        qualityFlags: {},
+        ingestedAt: 1_774_407_261_000,
+      },
+    ]);
+    spyOn(timescaleStore, "getProviderFetchOutcomes").mockResolvedValue([
+      {
+        outcomeId: "provider:ESH6:1",
+        provider: "massive",
+        source: "provider_rest",
+        symbol: "ESH6",
+        timeframe: "1m",
+        status: "empty",
+        startMs: 1,
+        endMs: 2,
+        barCount: 0,
+        error: null,
+        metadata: {},
+        createdAt: 3,
+      },
+    ]);
+    spyOn(timescaleStore, "getOperationalRuns").mockResolvedValue([
+      {
+        runId: "job:snapshot:1",
+        runType: "job",
+        name: "snapshot-refresh",
+        status: "failed",
+        trigger: "schedule",
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1,
+        counts: {},
+        error: "boom",
+        metadata: {},
+      },
+    ]);
+    spyOn(timescaleStore, "getIngestionRuns").mockResolvedValue([
+      {
+        runId: "ingestion:flat_file:1",
+        source: "flat_file",
+        status: "success",
+        startedAt: 1,
+        completedAt: 2,
+        symbolCount: 1,
+        barCount: 120,
+        error: null,
+        metadata: {},
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    ]);
+    spyOn(timescaleStore, "getDurableQualitySummary").mockResolvedValue({
+      symbol: "ESH6",
+      startMs: 1,
+      endMs: 2,
+      barCount: 120,
+      gapCount: 1,
+      spikeCount: 2,
+      invalidOhlcCount: 0,
+      zeroVolumeCount: 3,
+      negativeVolumeCount: 0,
+      oldestBarTs: 1,
+      newestBarTs: 2,
+    });
+
+    const headers = { "X-API-Key": Bun.env.HUB_API_KEY ?? "" };
+    const symbolsResponse = await handleRequest(
+      "GET",
+      "/admin/durable/symbols",
+      createRequest("/admin/durable/symbols?limit=10", { headers }),
+    );
+    const latestResponse = await handleRequest(
+      "GET",
+      "/admin/durable/bars/latest",
+      createRequest("/admin/durable/bars/latest?symbols=ESH6,NQH6&limit=10&source=live_ws", {
+        headers,
+      }),
+    );
+    const outcomesResponse = await handleRequest(
+      "GET",
+      "/admin/durable/provider-outcomes",
+      createRequest("/admin/durable/provider-outcomes?symbol=ESH6&status=empty", {
+        headers,
+      }),
+    );
+    const runsResponse = await handleRequest(
+      "GET",
+      "/admin/durable/operational-runs",
+      createRequest("/admin/durable/operational-runs?runType=job&status=failed", {
+        headers,
+      }),
+    );
+    const ingestionRunsResponse = await handleRequest(
+      "GET",
+      "/admin/durable/ingestion-runs",
+      createRequest("/admin/durable/ingestion-runs?source=flat_file&status=success", {
+        headers,
+      }),
+    );
+    const qualityResponse = await handleRequest(
+      "GET",
+      "/admin/durable/quality/ESH6",
+      createRequest("/admin/durable/quality/ESH6?start=1&end=2", { headers }),
+    );
+
+    expect(symbolsResponse.status).toBe(200);
+    expect(((await symbolsResponse.json()) as any).symbols[0].symbol).toBe("ESH6");
+    expect(((await latestResponse.json()) as any).bars[0].source).toBe("live_ws");
+    expect(latestBarsSpy).toHaveBeenCalledWith(["ESH6", "NQH6"], 10, "live_ws");
+    expect(((await outcomesResponse.json()) as any).outcomes[0].status).toBe("empty");
+    expect(((await runsResponse.json()) as any).runs[0].error).toBe("boom");
+    expect(((await ingestionRunsResponse.json()) as any).runs[0].source).toBe("flat_file");
+    expect(((await qualityResponse.json()) as any).spikeCount).toBe(2);
+  });
+
+  test("returns empty durable inspection payloads when durable data is absent", async () => {
+    spyOn(timescaleStore, "getRecentDurableSymbols").mockResolvedValue([]);
+    spyOn(timescaleStore, "getLatestDurableBars").mockResolvedValue([]);
+    spyOn(timescaleStore, "getProviderFetchOutcomes").mockResolvedValue([]);
+    spyOn(timescaleStore, "getOperationalRuns").mockResolvedValue([]);
+    spyOn(timescaleStore, "getIngestionRuns").mockResolvedValue([]);
+    spyOn(timescaleStore, "getDurableQualitySummary").mockResolvedValue({
+      symbol: "ESH6",
+      startMs: 1,
+      endMs: 2,
+      barCount: 0,
+      gapCount: 0,
+      spikeCount: 0,
+      invalidOhlcCount: 0,
+      zeroVolumeCount: 0,
+      negativeVolumeCount: 0,
+      oldestBarTs: null,
+      newestBarTs: null,
+    });
+
+    const headers = { "X-API-Key": Bun.env.HUB_API_KEY ?? "" };
+    const symbolsResponse = await handleRequest(
+      "GET",
+      "/admin/durable/symbols",
+      createRequest("/admin/durable/symbols", { headers }),
+    );
+    const latestResponse = await handleRequest(
+      "GET",
+      "/admin/durable/bars/latest",
+      createRequest("/admin/durable/bars/latest", { headers }),
+    );
+    const outcomesResponse = await handleRequest(
+      "GET",
+      "/admin/durable/provider-outcomes",
+      createRequest("/admin/durable/provider-outcomes", { headers }),
+    );
+    const runsResponse = await handleRequest(
+      "GET",
+      "/admin/durable/operational-runs",
+      createRequest("/admin/durable/operational-runs", { headers }),
+    );
+    const ingestionRunsResponse = await handleRequest(
+      "GET",
+      "/admin/durable/ingestion-runs",
+      createRequest("/admin/durable/ingestion-runs", { headers }),
+    );
+    const qualityResponse = await handleRequest(
+      "GET",
+      "/admin/durable/quality/ESH6",
+      createRequest("/admin/durable/quality/ESH6?start=1&end=2", { headers }),
+    );
+
+    expect(((await symbolsResponse.json()) as any).count).toBe(0);
+    expect(((await latestResponse.json()) as any).bars).toEqual([]);
+    expect(((await outcomesResponse.json()) as any).count).toBe(0);
+    expect(((await runsResponse.json()) as any).runs).toEqual([]);
+    expect(((await ingestionRunsResponse.json()) as any).runs).toEqual([]);
+    expect(((await qualityResponse.json()) as any).barCount).toBe(0);
+  });
+
+  test("protects and validates durable inspection endpoints", async () => {
+    const unauthorized = await handleRequest(
+      "GET",
+      "/admin/durable/symbols",
+      createRequest("/admin/durable/symbols"),
+    );
+    const badOutcomeStatus = await handleRequest(
+      "GET",
+      "/admin/durable/provider-outcomes",
+      createRequest("/admin/durable/provider-outcomes?status=weird", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const badIngestionSource = await handleRequest(
+      "GET",
+      "/admin/durable/ingestion-runs",
+      createRequest("/admin/durable/ingestion-runs?source=live_ws", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const badLatestSource = await handleRequest(
+      "GET",
+      "/admin/durable/bars/latest",
+      createRequest("/admin/durable/bars/latest?source=bad_source", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const missingRange = await handleRequest(
+      "GET",
+      "/admin/durable/quality/ESH6",
+      createRequest("/admin/durable/quality/ESH6", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+
+    expect(unauthorized.status).toBe(401);
+    expect(badOutcomeStatus.status).toBe(400);
+    expect(badIngestionSource.status).toBe(400);
+    expect(badLatestSource.status).toBe(400);
+    expect(missingRange.status).toBe(400);
+  });
+
+  test("lists and runs allowlisted admin diagnostic commands", async () => {
+    setMassiveClientForTesting({
+      isConnected: () => true,
+      getSubscriptions: () => [
+        { ev: "A", assetClass: "us_indices", symbols: ["ESH6", "NQH6"] },
+      ],
+    } as any);
+
+    spyOn(redisStore, "ping").mockResolvedValue("PONG");
+    spyOn(redisStore, "getStats").mockResolvedValue({
+      date: "2026-03-25",
+      barCount: 10,
+      symbolCount: 2,
+    } as any);
+    spyOn(timescaleStore, "ping").mockResolvedValue(true);
+    spyOn(redisStore, "getAllLatestArray").mockResolvedValue([]);
+    spyOn(redisStore, "getAllSnapshots").mockResolvedValue({});
+    spyOn(redisStore, "getAllActiveContracts").mockResolvedValue({});
+    spyOn(redisStore, "getAllRecoveryCheckpoints").mockResolvedValue({});
+    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue(["ESH6", "NQH6"]);
+    spyOn(hotCacheRebuilder, "rebuildLatestWindow").mockResolvedValue({
+      symbols: 2,
+      hydratedSymbols: 1,
+      barsLoaded: 120,
+      skippedSymbols: ["NQH6"],
+    });
+    spyOn(redisStore.redis, "multi").mockReturnValue({
+      lpush: () => ({
+        ltrim: () => ({
+          exec: async () => [],
+        }),
+      }),
+    } as any);
+
+    const listResponse = await handleRequest(
+      "GET",
+      "/admin/commands",
+      createRequest("/admin/commands", {
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const listPayload = (await listResponse.json()) as any;
+
+    expect(listResponse.status).toBe(200);
+    expect(listPayload.commands.some((command: any) => command.id === "health")).toBe(true);
+
+    const runResponse = await handleRequest(
+      "POST",
+      "/admin/commands/health/run",
+      createRequest("/admin/commands/health/run", {
+        method: "POST",
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const runPayload = (await runResponse.json()) as any;
+
+    expect(runResponse.status).toBe(200);
+    expect(runPayload.command.id).toBe("health");
+    expect(runPayload.lines.length).toBeGreaterThan(0);
+    expect(runPayload.output.status).toBe("warming");
+
+    const dryRunResponse = await handleRequest(
+      "POST",
+      "/admin/commands/hot-cache-rebuild-dry-run/run",
+      createRequest("/admin/commands/hot-cache-rebuild-dry-run/run", {
+        method: "POST",
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const dryRunPayload = (await dryRunResponse.json()) as any;
+
+    expect(dryRunResponse.status).toBe(200);
+    expect(dryRunPayload.command.id).toBe("hot-cache-rebuild-dry-run");
+    expect(dryRunPayload.output.barsLoaded).toBe(120);
   });
 
   test("returns recovery checkpoints when authorized", async () => {
@@ -240,6 +911,39 @@ describe("REST request handler", () => {
 
     expect(response.status).toBe(400);
     expect(payload.error).toContain("start and end");
+  });
+
+  test("returns degraded range payloads from the repository without failing the route", async () => {
+    spyOn(marketDataRepository, "getBarsRange").mockResolvedValue({
+      symbol: "ESH9",
+      tf: "1m",
+      start: 1,
+      end: 2,
+      source: "empty",
+      bars: [],
+      quality: {
+        gapCount: 0,
+        spikeCount: 0,
+        invalidOhlcCount: 0,
+        zeroVolumeCount: 0,
+        negativeVolumeCount: 0,
+        oldestBarTs: null,
+        newestBarTs: null,
+        freshness: "unknown",
+      },
+    });
+
+    const response = await handleRequest(
+      "GET",
+      "/bars/range/ESH9",
+      createRequest("/bars/range/ESH9?start=1&end=2&tf=1m"),
+    );
+    const payload = (await response.json()) as any;
+
+    expect(response.status).toBe(200);
+    expect(payload.source).toBe("empty");
+    expect(payload.count).toBe(0);
+    expect(payload.quality.freshness).toBe("unknown");
   });
 
   test("returns latest bars and symbol-specific latest responses", async () => {

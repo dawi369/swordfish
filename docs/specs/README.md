@@ -7,4 +7,4 @@ Specs describe planned or target behavior. They should be used before significan
 - [backend-data-layer-v1.md](./backend-data-layer-v1.md)
 - [market-data-contracts.md](./market-data-contracts.md)
 - [health-and-observability.md](./health-and-observability.md)
-
+- [observability-metrics.md](./observability-metrics.md)

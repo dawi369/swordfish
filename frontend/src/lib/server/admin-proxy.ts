@@ -35,5 +35,15 @@ export async function proxyAdminRequest(path: string, init: RequestInit = {}) {
     ? await response.json()
     : { error: await response.text() };
 
+  if (response.status === 401) {
+    return NextResponse.json(
+      {
+        error: "Admin backend rejected the configured HUB_API_KEY",
+        details: "Make sure frontend HUB_API_KEY matches backend HUB_API_KEY.",
+      },
+      { status: 502 },
+    );
+  }
+
   return NextResponse.json(payload, { status: response.status });
 }

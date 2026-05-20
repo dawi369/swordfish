@@ -2,6 +2,7 @@ import {
   HUB_BOOTSTRAP_FRONT_MONTHS_ON_STARTUP,
   HUB_BOOTSTRAP_SNAPSHOTS_ON_STARTUP,
   HUB_ENABLE_SCHEDULED_JOBS,
+  HUB_REBUILD_HOT_CACHE_ON_STARTUP,
 } from "@/config/env.js";
 import { dailyClearJob } from "@/jobs/clear_daily.js";
 import { frontMonthJob } from "@/jobs/front_month_job.js";
@@ -9,6 +10,12 @@ import { monthlySubscriptionJob } from "@/jobs/refresh_subscriptions.js";
 import { snapshotJob } from "@/jobs/snapshot_job.js";
 import { redisStore } from "@/server/data/redis_store.js";
 import type { MassiveWSClient } from "@/server/api/massive/ws_client.js";
+import { hotCacheRebuilder } from "@/services/hot_cache_rebuilder.js";
+import {
+  finishOperationalRun,
+  startOperationalRun,
+} from "@/utils/operational_runs.js";
+import { telemetry } from "@/utils/telemetry.js";
 
 const EASTERN_TIME_ZONE = "America/New_York";
 
@@ -16,6 +23,7 @@ export interface JobRuntimeOptions {
   enableScheduledJobs: boolean;
   bootstrapFrontMonthsOnStartup: boolean;
   bootstrapSnapshotsOnStartup: boolean;
+  rebuildHotCacheOnStartup: boolean;
   now?: () => number;
 }
 
@@ -29,6 +37,7 @@ function getDefaultJobRuntimeOptions(): JobRuntimeOptions {
     enableScheduledJobs: HUB_ENABLE_SCHEDULED_JOBS,
     bootstrapFrontMonthsOnStartup: HUB_BOOTSTRAP_FRONT_MONTHS_ON_STARTUP,
     bootstrapSnapshotsOnStartup: HUB_BOOTSTRAP_SNAPSHOTS_ON_STARTUP,
+    rebuildHotCacheOnStartup: HUB_REBUILD_HOT_CACHE_ON_STARTUP,
   };
 }
 
@@ -73,7 +82,7 @@ export async function initializeJobRuntime(
 
     if (!hasSnapshots || shouldBootstrapDailyJob(snapshotStatus, nowMs)) {
       console.log("[JobRuntime] Bootstrapping snapshot cache on startup");
-      await snapshotJob.runRefresh();
+      await snapshotJob.runRefresh("startup");
     }
   }
 
@@ -92,7 +101,68 @@ export async function initializeJobRuntime(
 
     if (shouldBootstrapFrontMonths) {
       console.log("[JobRuntime] Bootstrapping front-month cache on startup");
-      await frontMonthJob.runRefresh();
+      await frontMonthJob.runRefresh("startup");
+    }
+  }
+
+  if (options.rebuildHotCacheOnStartup) {
+    const run = await startOperationalRun({
+      runType: "recovery",
+      name: "hot-cache-rebuild-startup",
+      trigger: "startup",
+      metadata: {
+        dryRun: false,
+      },
+    });
+
+    try {
+      const subscribedSymbols = await redisStore.getSubscribedSymbols();
+      const result = await hotCacheRebuilder.rebuildLatestWindow(subscribedSymbols, {
+        dryRun: false,
+        nowMs,
+      });
+
+      await finishOperationalRun(run, "success", {
+        counts: {
+          symbols: result.symbols,
+          hydratedSymbols: result.hydratedSymbols,
+          barsLoaded: result.barsLoaded,
+          skippedSymbols: result.skippedSymbols.length,
+        },
+        metadata: {
+          skippedSymbols: result.skippedSymbols.slice(0, 100),
+        },
+      });
+      telemetry.metric({
+        name: "mk3.hot_cache_rebuild.startup",
+        type: "counter",
+        value: 1,
+        tags: {
+          status: "success",
+        },
+      });
+      telemetry.metric({
+        name: "mk3.hot_cache_rebuild.bars_loaded",
+        type: "gauge",
+        value: result.barsLoaded,
+        tags: {
+          trigger: "startup",
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[JobRuntime] Startup hot-cache rebuild failed", error);
+      await finishOperationalRun(run, "failed", {
+        error: message,
+      });
+      telemetry.metric({
+        name: "mk3.hot_cache_rebuild.startup",
+        type: "counter",
+        value: 1,
+        tags: {
+          status: "failed",
+        },
+      });
     }
   }
 

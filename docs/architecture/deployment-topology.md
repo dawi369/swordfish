@@ -10,6 +10,8 @@ Railway is the intended production target.
   Root directory: `/backend`
 - Redis service
   Private networking only.
+- Postgres service
+  Private networking only. Provides durable analytics storage via `DATABASE_URL`.
 
 ## Frontend
 
@@ -48,6 +50,8 @@ Important variables:
 - `HUB_PORT=3001`
 - `HUB_API_KEY`
 - `REDIS_URL` or `REDIS_HOST`/`REDIS_PORT`
+- `DATABASE_URL`
+- `HUB_REBUILD_HOT_CACHE_ON_STARTUP=false`
 
 ## Deployment Notes
 
@@ -55,6 +59,7 @@ Important variables:
 - Railway branch deployments currently come from `main`.
 - Frontend production builds run `next build`; TypeScript failures block deploy.
 - Backend deploy health depends on `/health` returning healthy within Railway's retry window.
+- Durable analytics are enabled when `DATABASE_URL` is attached to `mk3-backend`;
+  Redis remains the hot serving layer.
 
 See [../runbooks/railway-deploy.md](../runbooks/railway-deploy.md) and [../runbooks/failed-build-debugging.md](../runbooks/failed-build-debugging.md).
-

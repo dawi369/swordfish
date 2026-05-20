@@ -11,7 +11,7 @@ Refine the backend/data layer into a production-quality beta runtime with explic
 ## Non-Goals
 
 - Full historical warehouse.
-- TimescaleDB migration.
+- Replacing Redis as the hot serving/cache layer.
 - Paid billing launch.
 - AI Lab or backtesting data expansion.
 
@@ -22,7 +22,9 @@ Refine the backend/data layer into a production-quality beta runtime with explic
 - Redis hashes store latest bars, sessions, and snapshots.
 - Redis JSON strings store active-contract and front-month caches.
 - SQLite local recovery store supports reconnect/backfill behavior.
-- TimescaleDB remains optional/deferred.
+- Postgres is the durable analytics store when `DATABASE_URL` is configured.
+- TimescaleDB features are optional and enabled only when available; the schema
+  must boot on plain Postgres.
 
 ## Target Behavior
 
@@ -32,6 +34,10 @@ Refine the backend/data layer into a production-quality beta runtime with explic
 - Recovery/backfill can be manually triggered and safely observed.
 - Provider limitations are represented as confidence/status, not hidden as generic failures.
 - Admin endpoints are clearly separated from public endpoints.
+- Future AI/tool callers use typed backend services, not direct Redis/Postgres
+  access.
+- Redis remains the hot serving layer, while durable `bars_1m` and operational
+  records make Redis rebuildable and incident history inspectable.
 
 ## Workstreams
 
@@ -68,15 +74,23 @@ Refine the backend/data layer into a production-quality beta runtime with explic
 - standardize local and Railway verification commands
 - decide which admin endpoints are safe on the public backend host
 
+### 6. Tool-Safe Analytics Contracts
+
+- expose latest market state through a service function
+- expose symbol coverage and missing/stale explanations through a service function
+- expose range bars with quality metadata through a service function
+- expose provider/backfill outcomes through a service function
+- allow only safe dry-run diagnostics from tool-facing contracts
+- keep admin mutations behind authenticated routes and operational-run audit
+
 ## Verification
 
 Minimum local checks:
 
 ```bash
 cd backend
-bunx tsc --noEmit
-bun run test:unit
-bun run test:redis
+bunx tsc --noEmit --skipLibCheck
+bun run test:smoke
 ```
 
 Minimum runtime checks:
@@ -89,10 +103,18 @@ curl http://localhost:3001/snapshots | jq
 curl -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/health | jq
 ```
 
+Production durable-store verification after Railway Postgres is attached:
+
+```bash
+cd backend
+BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
+HUB_API_KEY=... \
+bun run verify:production-data-layer
+```
+
 ## Open Questions
 
 - What exact Redis retention window is acceptable for beta charts?
 - Should admin endpoints remain on the public backend domain?
 - Should beta access be manual Pro provisioning or a dedicated beta flag?
 - What is the minimum provider-data confidence required to display front-month labels?
-

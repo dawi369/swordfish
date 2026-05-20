@@ -4,7 +4,11 @@ import {
   fetchTickerSnapshotContract,
   snapshotContractToSnapshotData,
 } from "@/utils/massive_snapshots.js";
-import { Sentry } from "@/utils/sentry.js";
+import { captureExceptionWithContext } from "@/utils/sentry.js";
+import {
+  finishOperationalRun,
+  startOperationalRun,
+} from "@/utils/operational_runs.js";
 const REDIS_STATUS_KEY = "job:snapshot:status";
 
 interface SnapshotJobStatus {
@@ -54,12 +58,17 @@ export class SnapshotJob {
   /**
    * Fetch and store snapshots for all active symbols
    */
-  async runRefresh(): Promise<void> {
+  async runRefresh(trigger = "schedule"): Promise<void> {
     console.log("--- SnapshotJob ---");
     console.log("[SnapshotJob] Running snapshot refresh...");
 
     this.status.totalRuns++;
     this.status.lastRunTime = Date.now();
+    const run = await startOperationalRun({
+      runType: "job",
+      name: "snapshot-refresh",
+      trigger,
+    });
 
     try {
       const [subscribedSymbols, cachedContractSymbols] = await Promise.all([
@@ -76,6 +85,10 @@ export class SnapshotJob {
         this.status.lastSuccess = true;
         this.status.symbolsUpdated = 0;
         await this.saveStatus();
+        await finishOperationalRun(run, "skipped", {
+          counts: { symbols: 0, symbolsUpdated: 0 },
+          metadata: { reason: "no_active_symbols" },
+        });
         return;
       }
 
@@ -103,18 +116,29 @@ export class SnapshotJob {
       this.status.symbolsUpdated = updated;
 
       await this.saveStatus();
+      await finishOperationalRun(run, updated === symbols.length ? "success" : "partial_success", {
+        counts: {
+          symbols: symbols.length,
+          symbolsUpdated: updated,
+          symbolsMissing: symbols.length - updated,
+        },
+      });
 
       console.log(`[SnapshotJob] Completed: ${updated}/${symbols.length} symbols updated`);
       console.log("");
     } catch (err) {
       this.status.lastSuccess = false;
       this.status.lastError = err instanceof Error ? err.message : String(err);
-      Sentry.captureException(err, {
+      captureExceptionWithContext(err, {
         tags: {
-          job: "snapshot-refresh",
+          job_name: "snapshot-refresh",
+          run_id: run.runId,
         },
       });
       await this.saveStatus();
+      await finishOperationalRun(run, "failed", {
+        error: this.status.lastError,
+      });
       console.error("[SnapshotJob] Failed:", err);
     }
   }

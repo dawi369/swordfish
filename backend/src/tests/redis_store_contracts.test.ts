@@ -3,6 +3,8 @@ import { redisStore } from "@/server/data/redis_store.js";
 import type { ActiveContract } from "@/types/contract.types.js";
 import type { Bar } from "@/types/common.types.js";
 
+const runRedisTests = Bun.env.RUN_REDIS_TESTS === "1";
+
 async function ensureRedisAvailable(): Promise<void> {
   try {
     const pong = await redisStore.redis.ping();
@@ -45,7 +47,7 @@ async function ensureRedisAvailable(): Promise<void> {
   }
 }
 
-describe("RedisStore contract and subscription metadata", () => {
+describe.skipIf(!runRedisTests)("RedisStore contract and subscription metadata", () => {
   const productCode = "TESTROOT";
   const contractKey = `contracts:active:${productCode}`;
   const symbolA = "TESTA";

@@ -11,7 +11,11 @@ import { resolveFrontMonth } from "@/utils/front_month_resolver.js";
 import { buildGeneratedContracts } from "@/utils/contracts_calendar.js";
 import type { MassiveAssetClass } from "@/types/massive.types.js";
 import type { ActiveContract } from "@/types/contract.types.js";
-import { Sentry } from "@/utils/sentry.js";
+import { captureExceptionWithContext } from "@/utils/sentry.js";
+import {
+  finishOperationalRun,
+  startOperationalRun,
+} from "@/utils/operational_runs.js";
 
 const REDIS_CACHE_KEY = "cache:front-months";
 const REDIS_STATUS_KEY = "job:front-months:status";
@@ -100,12 +104,17 @@ export class FrontMonthJob {
     }
   }
 
-  async runRefresh(): Promise<void> {
+  async runRefresh(trigger = "schedule"): Promise<void> {
     console.log("--- FrontMonthJob ---");
     console.log("[FrontMonthJob] Running front month detection...");
 
     this.status.totalRuns++;
     this.status.lastRunTime = Date.now();
+    const run = await startOperationalRun({
+      runType: "job",
+      name: "front-month-refresh",
+      trigger,
+    });
 
     try {
       const products = await getAllConfiguredProducts();
@@ -152,6 +161,17 @@ export class FrontMonthJob {
       this.status.productsUpdated = Object.keys(newCache.products).length;
 
       await Promise.all([this.saveStatus(), this.saveCache()]);
+      await finishOperationalRun(
+        run,
+        this.status.productsUpdated === products.length ? "success" : "partial_success",
+        {
+          counts: {
+            products: products.length,
+            productsUpdated: this.status.productsUpdated,
+            productsMissing: products.length - this.status.productsUpdated,
+          },
+        },
+      );
 
       console.log(
         `[FrontMonthJob] Completed: ${this.status.productsUpdated} products updated`
@@ -160,12 +180,16 @@ export class FrontMonthJob {
     } catch (err) {
       this.status.lastSuccess = false;
       this.status.lastError = err instanceof Error ? err.message : String(err);
-      Sentry.captureException(err, {
+      captureExceptionWithContext(err, {
         tags: {
-          job: "front-month-refresh",
+          job_name: "front-month-refresh",
+          run_id: run.runId,
         },
       });
       await this.saveStatus();
+      await finishOperationalRun(run, "failed", {
+        error: this.status.lastError,
+      });
       console.error("[FrontMonthJob] Failed:", err);
     }
   }

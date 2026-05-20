@@ -14,23 +14,25 @@ services:
       timeout: 3s
       retries: 3
 
-  # timescaledb:
-  #   image: timescale/timescaledb:latest-pg17
-  #   container_name: mk3-timescaledb
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - timescaledb-data:/var/lib/postgresql/data
-  #   environment:
-  #     - POSTGRES_USER=postgres
-  #     - POSTGRES_PASSWORD=postgres
-  #     - POSTGRES_DB=postgres
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: ["CMD", "pg_isready", "-U", "postgres"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: mk3-timescaledb
+    profiles:
+      - durable
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # backend:
   #   build:
@@ -58,4 +60,4 @@ services:
 
 volumes:
   redis-data:
-  # timescaledb-data:
+  timescaledb-data:

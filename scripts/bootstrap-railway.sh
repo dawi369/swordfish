@@ -24,6 +24,7 @@ The script will create:
 - an empty frontend service
 - an empty backend service
 - a Redis service
+- a Postgres service for durable analytics storage
 EOF
 
 read -r -p "Continue? [y/N] " confirm
@@ -41,6 +42,9 @@ railway add --service "${BACKEND_SERVICE_NAME}"
 echo "Creating Redis service"
 railway add --database redis
 
+echo "Creating Postgres service"
+railway add --database postgres
+
 cat <<EOF
 
 Bootstrap complete.
@@ -53,14 +57,16 @@ Next steps in Railway:
    - ${FRONTEND_SERVICE_NAME}
    - ${BACKEND_SERVICE_NAME}
 4. Leave Redis private
-5. Paste variables from:
+5. Attach Postgres/DATABASE_URL to ${BACKEND_SERVICE_NAME}
+6. Paste variables from:
    - frontend/.env.example
    - backend/.env.example
-6. On frontend set:
+7. On frontend set:
    - NEXT_PUBLIC_SITE_URL to the frontend public domain
    - NEXT_PUBLIC_HUB_URL to the backend public domain
-7. On backend prefer Railway's injected REDIS_URL if available
+8. On backend prefer Railway's injected REDIS_URL if available
 
 Reference:
-- docs/railway.md
+- docs/runbooks/railway-deploy.md
+- docs/decisions/ADR-0003-railway-monorepo-services.md
 EOF

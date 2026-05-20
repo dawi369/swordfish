@@ -4,7 +4,11 @@ import type { MassiveWSClient } from "@/server/api/massive/ws_client.js";
 import type { MassiveAssetClass, MassiveWsRequest } from "@/types/massive.types.js";
 import type { RefreshJobStatus, RefreshDetails } from "@/types/common.types.js";
 import { scheduleBuilder } from "@/utils/cbs/schedule_cb.js";
-import { Sentry } from "@/utils/sentry.js";
+import { captureMessageWithContext } from "@/utils/sentry.js";
+import {
+  finishOperationalRun,
+  startOperationalRun,
+} from "@/utils/operational_runs.js";
 
 class MonthlySubscriptionJob {
   private cronJob: CronJob | null = null;
@@ -123,13 +127,18 @@ class MonthlySubscriptionJob {
     return details;
   }
 
-  async runRefresh(): Promise<void> {
+  async runRefresh(trigger = "schedule"): Promise<void> {
     console.log("\n--- MonthlySubscriptionJob ---");
     console.log("Running subscription refresh job...");
 
     this.status.totalRuns++;
     this.status.lastRunTime = Date.now();
     this.status.lastRefreshDetails = [];
+    const run = await startOperationalRun({
+      runType: "job",
+      name: "subscription-refresh",
+      trigger,
+    });
 
     const refreshTasks: Promise<RefreshDetails>[] = [];
     const assetClasses: MassiveAssetClass[] = [
@@ -166,10 +175,11 @@ class MonthlySubscriptionJob {
         .join("; ");
       this.status.lastError = errors;
       this.status.lastSuccess = anySuccess; // Partial success if at least one succeeded
-      Sentry.captureMessage("Subscription refresh completed with failures", {
+      captureMessageWithContext("Subscription refresh completed with failures", {
         level: "warning",
         tags: {
-          job: "subscription-refresh",
+          job_name: "subscription-refresh",
+          run_id: run.runId,
         },
         extra: {
           errors,
@@ -191,10 +201,26 @@ class MonthlySubscriptionJob {
     }
 
     await this.saveStatus();
-
-    // Summary
     const changedCount = results.filter((r) => r.changed).length;
     const successCount = results.filter((r) => r.success).length;
+    await finishOperationalRun(
+      run,
+      anyFailure ? (anySuccess ? "partial_success" : "failed") : "success",
+      {
+        counts: {
+          assetClasses: results.length,
+          successfulAssetClasses: successCount,
+          failedAssetClasses: results.length - successCount,
+          changedAssetClasses: changedCount,
+        },
+        error: anyFailure ? this.status.lastError : null,
+        metadata: {
+          details: results,
+        },
+      },
+    );
+
+    // Summary
     console.log(`Summary: ${successCount}/${results.length} successful, ${changedCount} changed`);
     console.log("-----------------------------------\n");
     console.log("");

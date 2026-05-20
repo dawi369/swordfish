@@ -92,3 +92,18 @@ export const HUB_BOOTSTRAP_FRONT_MONTHS_ON_STARTUP =
   getOptionalEnvVarAsBoolean("HUB_BOOTSTRAP_FRONT_MONTHS_ON_STARTUP") ?? true;
 export const HUB_BOOTSTRAP_SNAPSHOTS_ON_STARTUP =
   getOptionalEnvVarAsBoolean("HUB_BOOTSTRAP_SNAPSHOTS_ON_STARTUP") ?? true;
+export const HUB_REBUILD_HOT_CACHE_ON_STARTUP =
+  getOptionalEnvVarAsBoolean("HUB_REBUILD_HOT_CACHE_ON_STARTUP") ?? false;
+export const DATA_QUALITY_GAP_THRESHOLD_MS =
+  getOptionalEnvVarAsInt("DATA_QUALITY_GAP_THRESHOLD_MS") ?? 90_000;
+export const DATA_QUALITY_SPIKE_THRESHOLD_PCT =
+  Number(getOptionalEnvVar("DATA_QUALITY_SPIKE_THRESHOLD_PCT") ?? "0.25");
+
+if (
+  !Number.isFinite(DATA_QUALITY_SPIKE_THRESHOLD_PCT) ||
+  DATA_QUALITY_SPIKE_THRESHOLD_PCT <= 0
+) {
+  throw new Error(
+    "Environment variable DATA_QUALITY_SPIKE_THRESHOLD_PCT must be a positive number",
+  );
+}

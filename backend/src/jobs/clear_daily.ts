@@ -1,6 +1,10 @@
 import { CronJob } from "cron";
 import { redisStore } from "@/server/data/redis_store.js";
-import { Sentry } from "@/utils/sentry.js";
+import { captureExceptionWithContext } from "@/utils/sentry.js";
+import {
+  finishOperationalRun,
+  startOperationalRun,
+} from "@/utils/operational_runs.js";
 
 interface ClearJobStatus {
   lastRunTime: number | null;
@@ -44,11 +48,17 @@ export class DailyClearJob {
     }
   }
 
-  async runClear(force = false): Promise<void> {
+  async runClear(force = false, trigger = force ? "manual" : "schedule"): Promise<void> {
     console.log("--- DailyClearJob ---");
     console.log(`Running Redis maintenance job... (force: ${force})`);
     this.status.totalRuns++;
     this.status.lastRunTime = Date.now();
+    const run = await startOperationalRun({
+      runType: "job",
+      name: "daily-clear",
+      trigger,
+      metadata: { force },
+    });
 
     try {
       const result = force
@@ -60,6 +70,15 @@ export class DailyClearJob {
       this.status.clearedKeys = result.cleared;
 
       await this.saveStatus();
+      await finishOperationalRun(run, "success", {
+        counts: {
+          clearedKeys: result.cleared,
+        },
+        metadata: {
+          newDate: result.newDate,
+          force,
+        },
+      });
 
       console.log(
         `Daily maintenance completed: ${result.cleared} keys cleared, new date: ${result.newDate}`
@@ -68,13 +87,18 @@ export class DailyClearJob {
     } catch (err) {
       this.status.lastSuccess = false;
       this.status.lastError = err instanceof Error ? err.message : String(err);
-      Sentry.captureException(err, {
+      captureExceptionWithContext(err, {
         tags: {
-          job: "daily-clear",
+          job_name: "daily-clear",
+          run_id: run.runId,
         },
       });
 
       await this.saveStatus();
+      await finishOperationalRun(run, "failed", {
+        error: this.status.lastError,
+        metadata: { force },
+      });
 
       console.error("Daily clear job failed:", err);
     }
