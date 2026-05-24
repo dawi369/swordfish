@@ -2,7 +2,7 @@
 
 ## Goal
 
-MK3 emits structured metric logs that can be ingested by Datadog or another
+Swordfish emits structured metric logs that can be ingested by Datadog or another
 log-derived metrics backend without adding an in-process Datadog client.
 
 Every metric log is emitted as a normal backend log line with:
@@ -17,73 +17,73 @@ Every metric log is emitted as a normal backend log line with:
 
 | Metric | Type | Key Tags | Purpose |
 |---|---|---|---|
-| `mk3.admin_ops.status` | gauge | `status`, `redis`, `timescale_enabled`, `timescale_connected`, `massive_ws` | backend operator health and durable-store connectivity |
-| `mk3.data_coverage.stale_symbols` | gauge | none currently | stale symbol count from admin coverage |
-| `mk3.data_coverage.spike_symbols` | gauge | none currently | symbols with durable spike counts |
-| `mk3.market_data.write_success` | counter | `symbol`, `durable` | successful live write fanout |
-| `mk3.market_data.write_partial_failure` | counter | `symbol`, `redis`, `recovery`, `durable` | partial write failures across Redis/recovery/durable paths |
-| `mk3.market_data.durable_write` | counter | `source`, `durable` | durable historical/provider/flat-file write attempts |
-| `mk3.market_data.durable_bars` | gauge | `source` | bars written through the durable ingestion boundary |
-| `mk3.market_data.durable_range_failure` | counter | `symbol`, `tf` | durable range fallback failed; Redis/empty response served instead |
-| `mk3.market_data.durable_quality_failure` | counter | `symbol`, `tf` | durable quality summary failed; range response used local bar-quality fallback |
-| `mk3.tool.range_quality_record_failure` | counter | `symbol`, `tf` | tool range read stayed usable but durable quality-summary audit recording failed |
-| `mk3.provider_fetch.outcome` | counter | `provider`, `source`, `symbol`, `timeframe`, `status` | provider backfill outcome rate for `success`, `empty`, and `failed` |
-| `mk3.provider_fetch.bars` | gauge | `provider`, `source`, `symbol`, `timeframe` | bars returned by provider fetches |
-| `mk3.provider_fetch.run_symbols` | gauge | `source`, `status` | symbols attempted in provider backfill runs |
-| `mk3.admin_command.run` | counter | `command`, `status` | admin diagnostic/repair command usage |
-| `mk3.hot_cache_rebuild.startup` | counter | `status` | startup hot-cache rebuild success/failure |
-| `mk3.hot_cache_rebuild.bars_loaded` | gauge | `trigger` | bars loaded from durable storage into Redis during rebuild |
-| `mk3.operational_run.recorded` | counter | `run_type`, `name`, `status`, `trigger` | operational run state transitions |
-| `mk3.operational_run.duration_ms` | distribution | `run_type`, `name`, `status`, `trigger` | operational run durations |
+| `swordfish.admin_ops.status` | gauge | `status`, `redis`, `timescale_enabled`, `timescale_connected`, `massive_ws` | backend operator health and durable-store connectivity |
+| `swordfish.data_coverage.stale_symbols` | gauge | none currently | stale symbol count from admin coverage |
+| `swordfish.data_coverage.spike_symbols` | gauge | none currently | symbols with durable spike counts |
+| `swordfish.market_data.write_success` | counter | `symbol`, `durable` | successful live write fanout |
+| `swordfish.market_data.write_partial_failure` | counter | `symbol`, `redis`, `recovery`, `durable` | partial write failures across Redis/recovery/durable paths |
+| `swordfish.market_data.durable_write` | counter | `source`, `durable` | durable historical/provider/flat-file write attempts |
+| `swordfish.market_data.durable_bars` | gauge | `source` | bars written through the durable ingestion boundary |
+| `swordfish.market_data.durable_range_failure` | counter | `symbol`, `tf` | durable range fallback failed; Redis/empty response served instead |
+| `swordfish.market_data.durable_quality_failure` | counter | `symbol`, `tf` | durable quality summary failed; range response used local bar-quality fallback |
+| `swordfish.tool.range_quality_record_failure` | counter | `symbol`, `tf` | tool range read stayed usable but durable quality-summary audit recording failed |
+| `swordfish.provider_fetch.outcome` | counter | `provider`, `source`, `symbol`, `timeframe`, `status` | provider backfill outcome rate for `success`, `empty`, and `failed` |
+| `swordfish.provider_fetch.bars` | gauge | `provider`, `source`, `symbol`, `timeframe` | bars returned by provider fetches |
+| `swordfish.provider_fetch.run_symbols` | gauge | `source`, `status` | symbols attempted in provider backfill runs |
+| `swordfish.admin_command.run` | counter | `command`, `status` | admin diagnostic/repair command usage |
+| `swordfish.hot_cache_rebuild.startup` | counter | `status` | startup hot-cache rebuild success/failure |
+| `swordfish.hot_cache_rebuild.bars_loaded` | gauge | `trigger` | bars loaded from durable storage into Redis during rebuild |
+| `swordfish.operational_run.recorded` | counter | `run_type`, `name`, `status`, `trigger` | operational run state transitions |
+| `swordfish.operational_run.duration_ms` | distribution | `run_type`, `name`, `status`, `trigger` | operational run durations |
 
 ## Dashboard Panels
 
 - Durable store connected:
-  `mk3.admin_ops.status` grouped by `timescale_connected`.
+  `swordfish.admin_ops.status` grouped by `timescale_connected`.
 - Market data partial write failures:
-  count of `mk3.market_data.write_partial_failure` grouped by `durable`,
+  count of `swordfish.market_data.write_partial_failure` grouped by `durable`,
   `redis`, and `recovery`.
 - Durable range fallback failures:
-  count of `mk3.market_data.durable_range_failure` grouped by `symbol` and `tf`.
+  count of `swordfish.market_data.durable_range_failure` grouped by `symbol` and `tf`.
 - Durable quality fallback failures:
-  count of `mk3.market_data.durable_quality_failure` and
-  `mk3.tool.range_quality_record_failure` grouped by `symbol` and `tf`.
+  count of `swordfish.market_data.durable_quality_failure` and
+  `swordfish.tool.range_quality_record_failure` grouped by `symbol` and `tf`.
 - Stale symbol count:
-  latest `mk3.data_coverage.stale_symbols`.
+  latest `swordfish.data_coverage.stale_symbols`.
 - Spike symbol count:
-  latest `mk3.data_coverage.spike_symbols`.
+  latest `swordfish.data_coverage.spike_symbols`.
 - Provider empty/failed outcome rate:
-  count of `mk3.provider_fetch.outcome` grouped by `status`.
+  count of `swordfish.provider_fetch.outcome` grouped by `status`.
 - Admin repair usage:
-  count of `mk3.admin_command.run` grouped by `command` and `status`.
+  count of `swordfish.admin_command.run` grouped by `command` and `status`.
 - Operational run failures:
-  count of `mk3.operational_run.recorded` where `status=failed`, grouped by
+  count of `swordfish.operational_run.recorded` where `status=failed`, grouped by
   `run_type` and `name`.
 
 ## Initial Monitor Rules
 
 - Durable store disconnected:
-  alert when `mk3.admin_ops.status` reports `timescale_enabled=true` and
+  alert when `swordfish.admin_ops.status` reports `timescale_enabled=true` and
   `timescale_connected=false` for multiple consecutive checks.
 - Live write partial failures:
-  alert on any sustained `mk3.market_data.write_partial_failure`.
+  alert on any sustained `swordfish.market_data.write_partial_failure`.
 - Durable range degradation:
-  warn when `mk3.market_data.durable_range_failure` is non-zero for symbols that
+  warn when `swordfish.market_data.durable_range_failure` is non-zero for symbols that
   should have durable history.
 - Durable quality degradation:
-  warn when `mk3.market_data.durable_quality_failure` or
-  `mk3.tool.range_quality_record_failure` is non-zero over a rolling window.
+  warn when `swordfish.market_data.durable_quality_failure` or
+  `swordfish.tool.range_quality_record_failure` is non-zero over a rolling window.
 - Provider failures:
-  alert when `mk3.provider_fetch.outcome{status=failed}` is non-zero over a
+  alert when `swordfish.provider_fetch.outcome{status=failed}` is non-zero over a
   backfill window.
 - Provider empty spike:
-  warn when `mk3.provider_fetch.outcome{status=empty}` increases sharply for
+  warn when `swordfish.provider_fetch.outcome{status=empty}` increases sharply for
   active subscribed symbols.
 - Operational run failures:
-  alert when `mk3.operational_run.recorded{status=failed}` is emitted for
+  alert when `swordfish.operational_run.recorded{status=failed}` is emitted for
   scheduled jobs, recovery, or admin actions.
 - Stale symbols:
-  warn when `mk3.data_coverage.stale_symbols` remains above zero during an
+  warn when `swordfish.data_coverage.stale_symbols` remains above zero during an
   expected market/session window.
 
 ## Sentry Correlation

@@ -181,7 +181,7 @@ describe("AnalyticsToolService", () => {
     expect(result.source).toBe("redis");
     expect(result.count).toBe(1);
     expect(result.quality.freshness).toBe("fresh");
-    expect(metricSpy.mock.calls.some((call) => call[0].name === "mk3.tool.range_quality_record_failure")).toBe(true);
+    expect(metricSpy.mock.calls.some((call) => call[0].name === "swordfish.tool.range_quality_record_failure")).toBe(true);
   });
 
   test("runs only dry-run diagnostics for tool callers", async () => {

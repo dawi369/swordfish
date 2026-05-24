@@ -107,7 +107,7 @@ Production durable-store verification after Railway Postgres is attached:
 
 ```bash
 cd backend
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
+BACKEND_BASE_URL=https://swordfish-backend-production.up.railway.app \
 HUB_API_KEY=... \
 bun run verify:production-data-layer
 ```

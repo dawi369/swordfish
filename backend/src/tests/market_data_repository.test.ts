@@ -93,7 +93,7 @@ describe("MarketDataRepository", () => {
     expect(result.bars).toHaveLength(2);
     expect(result.quality.gapCount).toBe(1);
     expect(result.quality.spikeCount).toBe(1);
-    expect(metricSpy.mock.calls.some((call) => call[0].name === "mk3.market_data.durable_quality_failure")).toBe(true);
+    expect(metricSpy.mock.calls.some((call) => call[0].name === "swordfish.market_data.durable_quality_failure")).toBe(true);
   });
 
   test("returns an empty range instead of throwing when durable fallback is unavailable", async () => {
@@ -108,7 +108,7 @@ describe("MarketDataRepository", () => {
     expect(result.source).toBe("empty");
     expect(result.bars).toEqual([]);
     expect(result.quality.freshness).toBe("unknown");
-    expect(metricSpy.mock.calls.some((call) => call[0].name === "mk3.market_data.durable_range_failure")).toBe(true);
+    expect(metricSpy.mock.calls.some((call) => call[0].name === "swordfish.market_data.durable_range_failure")).toBe(true);
   });
 
   test("does not use Timescale for non-1m ranges", async () => {

@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { ADMIN_PANEL_PASSWORD, ADMIN_PANEL_SESSION_SECRET } from "@/config/env.server";
 
-export const ADMIN_SESSION_COOKIE = "mk3_admin_session";
+export const ADMIN_SESSION_COOKIE = "swordfish_admin_session";
 export const ADMIN_SESSION_MAX_AGE_SECONDS = 60 * 60 * 4;
 
 function sessionToken(): string | null {

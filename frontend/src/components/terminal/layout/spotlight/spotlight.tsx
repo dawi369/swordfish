@@ -256,7 +256,7 @@ export function Spotlight() {
 
   const handleAdminSelect = () => {
     captureAnalyticsEvent(ANALYTICS_EVENTS.adminCommandEntered);
-    window.dispatchEvent(new CustomEvent("mk3:open-admin-panel"));
+    window.dispatchEvent(new CustomEvent("swordfish:open-admin-panel"));
     close();
     setQuery("");
   };

@@ -1,8 +1,8 @@
-# MK3
+# Swordfish
 
 Futures terminal workbench.
 
-MK3 is the current Swordfish build: a fast frontend, a Bun market-data hub,
+Swordfish is a fast frontend, a Bun market-data hub,
 Redis as the hot serving layer, durable Postgres/Timescale-shaped storage for
 analytics state, and enough backend discipline to make the thing debuggable when
 real data starts acting weird.
@@ -21,7 +21,7 @@ The goal is not another pretty chart toy. The direction is:
 ## Shape
 
 ```text
-mk3/
+swordfish/
 |-- frontend/        # Next.js terminal UI
 |-- backend/         # Bun hub API, WebSocket service, jobs
 |-- docs/            # architecture, backend contracts, runbooks

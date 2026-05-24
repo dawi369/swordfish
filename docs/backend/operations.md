@@ -138,12 +138,12 @@ curl -X POST -H "X-API-Key: $HUB_API_KEY" "http://localhost:3001/admin/hot-cache
 
 ## Production Data-Layer Verification
 
-After Railway Postgres is attached, `DATABASE_URL` is set on `mk3-backend`, and
+After Railway Postgres is attached, `DATABASE_URL` is set on `swordfish-backend`, and
 the backend has restarted, run:
 
 ```bash
 cd backend
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
+BACKEND_BASE_URL=https://swordfish-backend-production.up.railway.app \
 HUB_API_KEY=... \
 bun run verify:production-data-layer
 ```

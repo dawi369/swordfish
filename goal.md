@@ -1,4 +1,4 @@
-# MK3 Durable Analytics Layer Plan
+# Swordfish Durable Analytics Layer Plan
 
 ## Executive Intent
 
@@ -41,8 +41,8 @@ freshness, source, and quality metadata.
 
 Already live or implemented:
 
-- Railway production has `mk3-backend`, `mk3-frontend`, `Redis`, and `Postgres`.
-- `mk3-backend` has `DATABASE_URL` wired to Railway Postgres by service
+- Railway production has `swordfish-backend`, `swordfish-frontend`, `Redis`, and `Postgres`.
+- `swordfish-backend` has `DATABASE_URL` wired to Railway Postgres by service
   reference.
 - `/health` reports Redis, durable Postgres, and Massive WebSocket connected.
 - Live WebSocket bars are being written to durable `bars_1m` with
@@ -92,8 +92,8 @@ Purpose: make the durable layer operationally accepted, not merely deployed.
 
 Tasks:
 
-- Confirm `mk3-backend` production deploy is serving the latest durable code.
-- Confirm `DATABASE_URL` is present on `mk3-backend` and points to Railway
+- Confirm `swordfish-backend` production deploy is serving the latest durable code.
+- Confirm `DATABASE_URL` is present on `swordfish-backend` and points to Railway
   Postgres by service reference.
 - Confirm durable disabling flags are absent:
   - `DISABLE_DURABLE_STORE=true`
@@ -111,7 +111,7 @@ Acceptance:
 
 ```bash
 cd backend
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
+BACKEND_BASE_URL=https://swordfish-backend-production.up.railway.app \
 bun run verify:production-data-layer
 ```
 
@@ -315,7 +315,7 @@ Disabling durable storage must not break Redis live serving.
 
 Safe rollback levers:
 
-- unset `DATABASE_URL` on `mk3-backend`, or
+- unset `DATABASE_URL` on `swordfish-backend`, or
 - set `DISABLE_DURABLE_STORE=true`, then
 - redeploy/restart backend, then
 - confirm `/health` keeps Redis and Massive WebSocket connected.
@@ -347,22 +347,22 @@ bun run test
 Production health:
 
 ```bash
-curl https://mk3-backend-production.up.railway.app/health
+curl https://swordfish-backend-production.up.railway.app/health
 ```
 
 Production admin checks should be run from a Railway-injected environment so
 secrets are not copied into shell history:
 
 ```bash
-railway run --service mk3-backend --environment production -- \
-  sh -c 'curl -s -H "X-API-Key: $HUB_API_KEY" https://mk3-backend-production.up.railway.app/admin/health'
+railway run --service swordfish-backend --environment production -- \
+  sh -c 'curl -s -H "X-API-Key: $HUB_API_KEY" https://swordfish-backend-production.up.railway.app/admin/health'
 ```
 
 Production verifier:
 
 ```bash
-railway run --service mk3-backend --environment production -- \
-  sh -c 'cd backend && BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app bun run verify:production-data-layer'
+railway run --service swordfish-backend --environment production -- \
+  sh -c 'cd backend && BACKEND_BASE_URL=https://swordfish-backend-production.up.railway.app bun run verify:production-data-layer'
 ```
 
 ## Completion Checklist

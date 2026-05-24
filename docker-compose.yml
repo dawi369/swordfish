@@ -1,7 +1,7 @@
 services:
   redis:
     image: redis/redis-stack-server:latest
-    container_name: mk3-redis
+    container_name: swordfish-redis
     ports:
       - "6379:6379"
     volumes:
@@ -16,7 +16,7 @@ services:
 
   timescaledb:
     image: timescale/timescaledb:latest-pg17
-    container_name: mk3-timescaledb
+    container_name: swordfish-timescaledb
     profiles:
       - durable
     ports:
@@ -38,7 +38,7 @@ services:
   #   build:
   #     context: ./backend
   #     dockerfile: Dockerfile
-  #   container_name: mk3-backend
+  #   container_name: swordfish-backend
   #   ports:
   #     - "${HUB_PORT:-3001}:${HUB_PORT:-3001}"  # Match your env
   #   environment:

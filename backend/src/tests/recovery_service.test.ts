@@ -255,8 +255,8 @@ describe("RecoveryService", () => {
       expect(durableSpy).toHaveBeenCalledWith(providerBars, "provider_rest");
       expect(redisWrites).toHaveLength(1);
       expect(checkpoints.at(-1)).toBe(providerBars[0]?.startTime);
-      expect(metricSpy.mock.calls.some((call) => call[0].name === "mk3.provider_fetch.outcome")).toBe(true);
-      expect(metricSpy.mock.calls.some((call) => call[0].name === "mk3.provider_fetch.bars")).toBe(true);
+      expect(metricSpy.mock.calls.some((call) => call[0].name === "swordfish.provider_fetch.outcome")).toBe(true);
+      expect(metricSpy.mock.calls.some((call) => call[0].name === "swordfish.provider_fetch.bars")).toBe(true);
     } finally {
       dateNowSpy.mockRestore();
       mock.restore();

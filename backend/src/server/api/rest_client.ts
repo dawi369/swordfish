@@ -495,7 +495,7 @@ async function buildAdminOpsPayload() {
         : "ok";
 
   telemetry.metric({
-    name: "mk3.admin_ops.status",
+    name: "swordfish.admin_ops.status",
     type: "gauge",
     value: status === "ok" ? 1 : status === "warming" ? 0.5 : 0,
     tags: {
@@ -507,12 +507,12 @@ async function buildAdminOpsPayload() {
     },
   });
   telemetry.metric({
-    name: "mk3.data_coverage.stale_symbols",
+    name: "swordfish.data_coverage.stale_symbols",
     type: "gauge",
     value: coverage.summary.staleSymbols,
   });
   telemetry.metric({
-    name: "mk3.data_coverage.spike_symbols",
+    name: "swordfish.data_coverage.spike_symbols",
     type: "gauge",
     value: coverage.summary.spikeSymbols,
   });
@@ -768,7 +768,7 @@ async function runAdminCommand(commandId: string) {
       },
     });
     telemetry.metric({
-      name: "mk3.admin_command.run",
+      name: "swordfish.admin_command.run",
       type: "counter",
       value: 1,
       tags: {

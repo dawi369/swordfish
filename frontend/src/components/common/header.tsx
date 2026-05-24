@@ -69,7 +69,7 @@ export function Header() {
                     className="flex items-center will-change-transform"
                   >
                     <Image
-                      src="/mk3LogoTransparent.png"
+                      src="/swordfishLogoTransparent.png"
                       // src="/cleaned_up_logo.svg"
                       alt="Swordfish Logo"
                       width={40}

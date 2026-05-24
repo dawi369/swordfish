@@ -271,8 +271,8 @@ export function AdminPanel() {
       void loadCommands();
     };
 
-    window.addEventListener("mk3:open-admin-panel", handleOpen);
-    return () => window.removeEventListener("mk3:open-admin-panel", handleOpen);
+    window.addEventListener("swordfish:open-admin-panel", handleOpen);
+    return () => window.removeEventListener("swordfish:open-admin-panel", handleOpen);
   }, [loadCommands, loadOps]);
 
   const jobs = useMemo(() => Object.values(ops?.jobs ?? {}), [ops]);

@@ -253,7 +253,7 @@ export class AnalyticsToolService {
       };
     } catch (error) {
       telemetry.metric({
-        name: "mk3.tool.range_quality_record_failure",
+        name: "swordfish.tool.range_quality_record_failure",
         type: "counter",
         value: 1,
         tags: {

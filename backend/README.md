@@ -1,4 +1,4 @@
-# MK3 Backend (Bun)
+# Swordfish Backend (Bun)
 
 Real-time futures data backend using Massive futures APIs.
 
@@ -99,10 +99,10 @@ Start here:
 
 ## Production Data-Layer Verification
 
-After Railway Postgres is attached and `DATABASE_URL` is set on `mk3-backend`:
+After Railway Postgres is attached and `DATABASE_URL` is set on `swordfish-backend`:
 
 ```bash
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
+BACKEND_BASE_URL=https://swordfish-backend-production.up.railway.app \
 HUB_API_KEY=... \
 bun run verify:production-data-layer
 ```

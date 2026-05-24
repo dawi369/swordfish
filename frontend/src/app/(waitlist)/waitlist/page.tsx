@@ -53,7 +53,7 @@ export default function WaitlistPage() {
         >
           <div className="flex items-center gap-4">
             <Image
-              src="/mk3LogoTransparent.png"
+              src="/swordfishLogoTransparent.png"
               alt="Swordfish"
               width={44}
               height={44}

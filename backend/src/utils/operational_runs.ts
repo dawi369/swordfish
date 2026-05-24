@@ -24,7 +24,7 @@ export async function recordOperationalRun(
 ): Promise<void> {
   await timescaleStore.recordOperationalRun(record);
   telemetry.metric({
-    name: "mk3.operational_run.recorded",
+    name: "swordfish.operational_run.recorded",
     type: "counter",
     value: 1,
     tags: {
@@ -97,7 +97,7 @@ export async function finishOperationalRun(
 
   await recordOperationalRun(completedRecord);
   telemetry.metric({
-    name: "mk3.operational_run.duration_ms",
+    name: "swordfish.operational_run.duration_ms",
     type: "distribution",
     value: completedRecord.durationMs ?? 0,
     tags: {

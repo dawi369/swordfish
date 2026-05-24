@@ -3,8 +3,8 @@
 ## Identify Service And Deployment
 
 ```bash
-railway deployment list --service mk3-frontend --environment production --limit 20
-railway deployment list --service mk3-backend --environment production --limit 20
+railway deployment list --service swordfish-frontend --environment production --limit 20
+railway deployment list --service swordfish-backend --environment production --limit 20
 ```
 
 ## Pull Build Logs

@@ -69,7 +69,7 @@ export class MarketDataRepository {
       durableBars = await timescaleStore.getBars1mRange(symbol, start, end);
     } catch (error) {
       telemetry.metric({
-        name: "mk3.market_data.durable_range_failure",
+        name: "swordfish.market_data.durable_range_failure",
         type: "counter",
         value: 1,
         tags: {
@@ -123,7 +123,7 @@ export class MarketDataRepository {
       quality = await timescaleStore.getDurableQualitySummary(symbol, start, end);
     } catch (error) {
       telemetry.metric({
-        name: "mk3.market_data.durable_quality_failure",
+        name: "swordfish.market_data.durable_quality_failure",
         type: "counter",
         value: 1,
         tags: {

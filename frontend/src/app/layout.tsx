@@ -62,7 +62,7 @@ export const metadata: Metadata = {
     siteName: "Swordfish",
     images: [
       {
-        url: "/mk3LogoTransparentnBackground.png",
+        url: "/swordfishLogoTransparentnBackground.png",
         width: 1200,
         height: 630,
         alt: "Swordfish Futures Intelligence",
@@ -74,18 +74,18 @@ export const metadata: Metadata = {
     title: "Swordfish - Futures Intelligence",
     description: "Futures. Focused. Fast",
     creator: "@devDawi",
-    images: ["/mk3LogoTransparentnBackground.png"],
+    images: ["/swordfishLogoTransparentnBackground.png"],
   },
   icons: {
     icon: [
       {
-        url: "/mk3LogoTransparent.png",
+        url: "/swordfishLogoTransparent.png",
         type: "image/png",
         sizes: "32x32",
       },
     ],
-    shortcut: "/mk3LogoTransparent.png",
-    apple: "/mk3LogoTransparent.png",
+    shortcut: "/swordfishLogoTransparent.png",
+    apple: "/swordfishLogoTransparent.png",
   },
   manifest: "/manifest.json",
   appleWebApp: {

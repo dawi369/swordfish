@@ -27,7 +27,7 @@ type TickerGroup = { [key: string]: TickerEntry };
 type AssetClass = "grains" | "volatiles" | "us_indices" | "softs" | "metals" | "currencies";
 
 // Construct absolute paths to ticker files using import.meta.dir
-// import.meta.dir gives us /home/david/dev/mk3/backend/src/utils
+// import.meta.dir gives us /home/david/dev/swordfish/backend/src/utils
 // We need to go up two levels to backend root, then into tickers/
 const BACKEND_ROOT = `${import.meta.dir}/../..`;
 

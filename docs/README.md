@@ -1,6 +1,6 @@
-# MK3 Docs
+# Swordfish Docs
 
-This directory is the source of truth for MK3 system, backend, data-layer, operational, and planning docs.
+This directory is the source of truth for Swordfish system, backend, data-layer, operational, and planning docs.
 
 ## Read First
 

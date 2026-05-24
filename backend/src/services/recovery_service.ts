@@ -254,7 +254,7 @@ export class RecoveryService {
           },
         });
         telemetry.metric({
-          name: "mk3.provider_fetch.outcome",
+          name: "swordfish.provider_fetch.outcome",
           type: "counter",
           value: 1,
           tags: {
@@ -266,7 +266,7 @@ export class RecoveryService {
           },
         });
         telemetry.metric({
-          name: "mk3.provider_fetch.bars",
+          name: "swordfish.provider_fetch.bars",
           type: "gauge",
           value: providerBars.length,
           tags: {
@@ -327,7 +327,7 @@ export class RecoveryService {
           },
         });
         telemetry.metric({
-          name: "mk3.provider_fetch.outcome",
+          name: "swordfish.provider_fetch.outcome",
           type: "counter",
           value: 1,
           tags: {
@@ -372,7 +372,7 @@ export class RecoveryService {
       0,
     );
     telemetry.metric({
-      name: "mk3.provider_fetch.run_symbols",
+      name: "swordfish.provider_fetch.run_symbols",
       type: "gauge",
       value: results.length,
       tags: {

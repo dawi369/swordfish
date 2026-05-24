@@ -3,7 +3,7 @@
  * Verify the production data-layer acceptance gates after DATABASE_URL is wired.
  *
  * Usage:
- *   BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
+ *   BACKEND_BASE_URL=https://swordfish-backend-production.up.railway.app \
  *   HUB_API_KEY=... \
  *   bun run verify:production-data-layer
  *
