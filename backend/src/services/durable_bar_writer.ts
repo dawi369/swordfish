@@ -67,7 +67,7 @@ export class DurableBarWriter {
       });
 
       telemetry.metric({
-        name: "mk3.market_data.durable_write",
+        name: "swordfish.market_data.durable_write",
         type: "counter",
         value: 1,
         tags: {
@@ -76,7 +76,7 @@ export class DurableBarWriter {
         },
       });
       telemetry.metric({
-        name: "mk3.market_data.durable_bars",
+        name: "swordfish.market_data.durable_bars",
         type: "gauge",
         value: written,
         tags: {
@@ -101,7 +101,7 @@ export class DurableBarWriter {
         },
       });
       telemetry.metric({
-        name: "mk3.market_data.durable_write",
+        name: "swordfish.market_data.durable_write",
         type: "counter",
         value: 1,
         tags: {

@@ -2,10 +2,10 @@
 
 ## Services
 
-- `mk3-frontend`
+- `swordfish-frontend`
   - root directory: `/frontend`
   - config path: `/frontend/railway.toml`
-- `mk3-backend`
+- `swordfish-backend`
   - root directory: `/backend`
   - config path: `/backend/railway.toml`
 - Redis service
@@ -41,15 +41,15 @@ history snippets, or shared logs.
 ## List Deployments
 
 ```bash
-railway deployment list --service mk3-frontend --environment production --limit 20
-railway deployment list --service mk3-backend --environment production --limit 20
+railway deployment list --service swordfish-frontend --environment production --limit 20
+railway deployment list --service swordfish-backend --environment production --limit 20
 ```
 
 ## Build Logs
 
 ```bash
-railway logs --build --latest --lines 300 --service mk3-frontend --environment production
-railway logs --build --latest --lines 300 --service mk3-backend --environment production
+railway logs --build --latest --lines 300 --service swordfish-frontend --environment production
+railway logs --build --latest --lines 300 --service swordfish-backend --environment production
 ```
 
 For a specific deployment:
@@ -61,7 +61,7 @@ railway logs --build --lines 500 <deployment-id>
 ## Deploy Logs
 
 ```bash
-railway logs --deployment --latest --lines 300 --service mk3-backend --environment production
+railway logs --deployment --latest --lines 300 --service swordfish-backend --environment production
 ```
 
 ## Healthchecks
@@ -75,7 +75,7 @@ Use this when turning on the Postgres-backed data layer in production.
 
 Preconditions:
 
-- `mk3-backend` and Redis are already healthy.
+- `swordfish-backend` and Redis are already healthy.
 - Railway CLI is authenticated and scoped to the intended project/environment.
 - The code has passed:
 
@@ -92,22 +92,22 @@ railway add --database postgres --json
 
 # Inspect service variable names. Do not use --json or --kv in shared logs;
 # those output modes include raw secret values.
-railway variable list --service mk3-backend --environment production
+railway variable list --service swordfish-backend --environment production
 
 # Durable storage must not be explicitly disabled during activation. If either
 # key appears in the variable list above with a disabling value, remove it.
-# railway variable delete ENABLE_TIMESCALE --service mk3-backend --environment production
-# railway variable delete DISABLE_DURABLE_STORE --service mk3-backend --environment production
+# railway variable delete ENABLE_TIMESCALE --service swordfish-backend --environment production
+# railway variable delete DISABLE_DURABLE_STORE --service swordfish-backend --environment production
 
 # Prefer Railway's dashboard/attach flow for DATABASE_URL. If setting manually,
 # avoid echoing the secret in shared logs; this form reads it from stdin.
 printf '%s' "$DATABASE_URL" | railway variable set DATABASE_URL \
   --stdin \
-  --service mk3-backend \
+  --service swordfish-backend \
   --environment production \
   --skip-deploys
 
-railway service restart --service mk3-backend --environment production --yes --json
+railway service restart --service swordfish-backend --environment production --yes --json
 ```
 
 Then verify:
@@ -134,17 +134,9 @@ HUB_API_KEY=... \
 bun run verify:production-data-layer
 ```
 
-If `provider fetch outcomes` fails because none exist yet, intentionally run
-one manual backfill before re-running the verifier. If it fails because all
-recent outcomes are `failed`, inspect backend logs and fix the provider/backfill
-failure before accepting the production data layer. The same backfill should
-also create `/admin/durable/ingestion-runs` audit rows:
-
-```bash
-curl -X POST \
-  -H "X-API-Key: $HUB_API_KEY" \
-  https://mk3-backend-production.up.railway.app/admin/recovery/backfill | jq
-```
+The verifier expects `POST /admin/recovery/backfill` to return `410 disabled`.
+Do not run provider REST backfill for futures history. Historical fill waits
+for Massive futures flat-file access.
 
 If `live durable bars_1m rows` fails, confirm the websocket has run long enough
 to write at least one `source=live_ws` row:
@@ -154,8 +146,8 @@ curl -H "X-API-Key: $HUB_API_KEY" \
   "https://mk3-backend-production.up.railway.app/admin/durable/bars/latest?limit=25&source=live_ws" | jq
 ```
 
-After durable `bars_1m` rows and provider outcomes are verified, an operator
-can dry-run hot-cache hydration:
+After durable `bars_1m` rows and disabled-backfill behavior are verified, an
+operator can dry-run hot-cache hydration:
 
 ```bash
 curl -X POST \
@@ -171,7 +163,7 @@ HUB_REBUILD_HOT_CACHE_ON_STARTUP=true
 
 Rollback/degraded mode:
 
-- Unset `DATABASE_URL` or set `DISABLE_DURABLE_STORE=true` on `mk3-backend`.
+- Unset `DATABASE_URL` or set `DISABLE_DURABLE_STORE=true` on `swordfish-backend`.
 - Keep Redis serving; public range reads will return Redis or empty source
   labels rather than treating Postgres as archival truth.
 - Re-run `/health` and `/admin/health` and confirm Redis/Massive WS remain
@@ -182,3 +174,16 @@ Rollback/degraded mode:
 - Build failure: TypeScript, dependency install, Dockerfile, lockfile, Next build.
 - Deploy failure: app starts but healthcheck never passes.
 - Runtime failure: deploy succeeds, then logs/HTTP show degraded behavior.
+
+## Current Backend Deploy Caveat
+
+The current production backend service is still named `mk3-backend`, and its
+Railway root directory is `/backend`. Deploy backend changes from the repo root:
+
+```bash
+railway up --service mk3-backend --environment production --detach
+```
+
+Do not combine `./backend --path-as-root` with this service config. That makes
+the uploaded snapshot root differ from the configured `/backend` root and can
+fail before the build starts.

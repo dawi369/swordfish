@@ -16,9 +16,11 @@ import {
   finishOperationalRun,
   startOperationalRun,
 } from "@/utils/operational_runs.js";
+import { recordJobFinished, recordJobStarted } from "@/utils/job_observability.js";
 
 const REDIS_CACHE_KEY = "cache:front-months";
 const REDIS_STATUS_KEY = "job:front-months:status";
+const JOB_NAME = "front-month-refresh";
 
 const FRONT_MONTH_CANDIDATE_LIMITS: Record<MassiveAssetClass, number> = {
   us_indices: 4,
@@ -112,9 +114,10 @@ export class FrontMonthJob {
     this.status.lastRunTime = Date.now();
     const run = await startOperationalRun({
       runType: "job",
-      name: "front-month-refresh",
+      name: JOB_NAME,
       trigger,
     });
+    recordJobStarted({ jobName: JOB_NAME, trigger, runId: run.runId });
 
     try {
       const products = await getAllConfiguredProducts();
@@ -161,17 +164,26 @@ export class FrontMonthJob {
       this.status.productsUpdated = Object.keys(newCache.products).length;
 
       await Promise.all([this.saveStatus(), this.saveCache()]);
-      await finishOperationalRun(
-        run,
-        this.status.productsUpdated === products.length ? "success" : "partial_success",
-        {
-          counts: {
-            products: products.length,
-            productsUpdated: this.status.productsUpdated,
-            productsMissing: products.length - this.status.productsUpdated,
-          },
-        },
-      );
+      const status =
+        this.status.productsUpdated === products.length
+          ? "success"
+          : "partial_success";
+      const counts = {
+        products: products.length,
+        productsUpdated: this.status.productsUpdated,
+        productsMissing: products.length - this.status.productsUpdated,
+      };
+      await finishOperationalRun(run, status, {
+        counts,
+      });
+      recordJobFinished({
+        jobName: JOB_NAME,
+        trigger,
+        runId: run.runId,
+        status,
+        startedAt: run.startedAt,
+        counts,
+      });
 
       console.log(
         `[FrontMonthJob] Completed: ${this.status.productsUpdated} products updated`
@@ -189,6 +201,13 @@ export class FrontMonthJob {
       await this.saveStatus();
       await finishOperationalRun(run, "failed", {
         error: this.status.lastError,
+      });
+      recordJobFinished({
+        jobName: JOB_NAME,
+        trigger,
+        runId: run.runId,
+        status: "failed",
+        startedAt: run.startedAt,
       });
       console.error("[FrontMonthJob] Failed:", err);
     }

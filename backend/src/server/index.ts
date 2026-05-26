@@ -7,6 +7,7 @@ import { scheduleBuilder } from "@/utils/cbs/schedule_cb.js";
 import { recoveryService } from "@/services/recovery_service.js";
 import { initializeJobRuntime, stopJobRuntime } from "@/server/job_runtime.js";
 import { flushSentry, initSentry, Sentry } from "@/utils/sentry.js";
+import { HUB_DISABLE_PROVIDER_CONNECTION } from "@/config/env.js";
 
 // Global reference for graceful shutdown
 let massiveClient: MassiveWSClient | null = null;
@@ -35,8 +36,16 @@ async function startHubServer() {
     const futuresMarket: MassiveMarketType = "futures";
 
     // Expose health and public API before slower market-data warmup so deploy
-    // healthchecks are not blocked by provider latency or backfills.
+    // healthchecks are not blocked by provider latency.
     await startHubRESTApi(massiveClient);
+
+    if (HUB_DISABLE_PROVIDER_CONNECTION) {
+      console.warn(
+        "Provider connection disabled by HUB_DISABLE_PROVIDER_CONNECTION=true; serving health/admin APIs without Massive live ingestion.",
+      );
+      console.log("Hub server running in provider-disabled mode\n");
+      return;
+    }
 
     await massiveClient.connect(futuresMarket);
 
@@ -67,19 +76,8 @@ async function startHubServer() {
       `[Recovery] Rehydrated ${rehydration.barsLoaded} bars across ${rehydration.hydratedSymbols} symbols`,
     );
 
-    const backfillResults = await recoveryService.backfillSymbolsFromProvider(
-      subscribedSymbols,
-      {
-        source: "startup",
-        excludeCurrentMinute: true,
-      },
-    );
-    const startupBackfillCount = backfillResults.reduce(
-      (sum, result) => sum + result.providerBars,
-      0,
-    );
     console.log(
-      `[Recovery] Provider backfill loaded ${startupBackfillCount} bars across ${backfillResults.length} symbols`,
+      "[Recovery] Provider REST backfill is disabled; live WebSocket bars are the only current production fill path.",
     );
 
     // Brief pause before continuing

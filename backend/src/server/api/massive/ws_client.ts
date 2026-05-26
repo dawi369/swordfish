@@ -17,7 +17,6 @@ import { MassiveAggregateEventSchema } from "@/schemas/events.js";
 import { ConnectionState } from "@/types/massive.types.js";
 import type { WSHealth } from "@/types/massive.types.js";
 import { isMarketHours } from "@/utils/massive.utils.js";
-import { recoveryService } from "@/services/recovery_service.js";
 import { marketDataWriter } from "@/services/market_data_writer.js";
 import type { Bar } from "@/types/common.types.js";
 
@@ -542,24 +541,12 @@ export class MassiveWSClient {
     }
 
     try {
-      const recoveryResults = await recoveryService.backfillSymbolsFromProvider(
-        this.getSubscribedSymbols(),
-        {
-          source: "reconnect",
-          disconnectedAt: this.lastDisconnectAt,
-          excludeCurrentMinute: true,
-        },
-      );
-      const recoveredBars = recoveryResults.reduce(
-        (sum, result) => sum + result.providerBars,
-        0,
-      );
       const flushedBars = await this.flushBufferedBars();
       console.log(
-        `[Recovery] Reconnect gap-fill applied ${recoveredBars} provider bars and flushed ${flushedBars} buffered live bars`,
+        `[Recovery] Provider REST backfill disabled; flushed ${flushedBars} buffered live bars after reconnect`,
       );
     } catch (error) {
-      console.error("[Recovery] Reconnect gap-fill failed:", error);
+      console.error("[Recovery] Reconnect buffer flush failed:", error);
       const flushedBars = await this.flushBufferedBars();
       console.log(
         `[Recovery] Flushed ${flushedBars} buffered live bars after recovery failure`,

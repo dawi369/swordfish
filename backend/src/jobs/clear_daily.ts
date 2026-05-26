@@ -5,6 +5,9 @@ import {
   finishOperationalRun,
   startOperationalRun,
 } from "@/utils/operational_runs.js";
+import { recordJobFinished, recordJobStarted } from "@/utils/job_observability.js";
+
+const JOB_NAME = "daily-clear";
 
 interface ClearJobStatus {
   lastRunTime: number | null;
@@ -55,10 +58,11 @@ export class DailyClearJob {
     this.status.lastRunTime = Date.now();
     const run = await startOperationalRun({
       runType: "job",
-      name: "daily-clear",
+      name: JOB_NAME,
       trigger,
       metadata: { force },
     });
+    recordJobStarted({ jobName: JOB_NAME, trigger, runId: run.runId });
 
     try {
       const result = force
@@ -68,16 +72,25 @@ export class DailyClearJob {
       this.status.lastSuccess = true;
       this.status.lastError = null;
       this.status.clearedKeys = result.cleared;
+      const counts = {
+        clearedKeys: result.cleared,
+      };
 
       await this.saveStatus();
       await finishOperationalRun(run, "success", {
-        counts: {
-          clearedKeys: result.cleared,
-        },
+        counts,
         metadata: {
           newDate: result.newDate,
           force,
         },
+      });
+      recordJobFinished({
+        jobName: JOB_NAME,
+        trigger,
+        runId: run.runId,
+        status: "success",
+        startedAt: run.startedAt,
+        counts,
       });
 
       console.log(
@@ -98,6 +111,13 @@ export class DailyClearJob {
       await finishOperationalRun(run, "failed", {
         error: this.status.lastError,
         metadata: { force },
+      });
+      recordJobFinished({
+        jobName: JOB_NAME,
+        trigger,
+        runId: run.runId,
+        status: "failed",
+        startedAt: run.startedAt,
       });
 
       console.error("Daily clear job failed:", err);

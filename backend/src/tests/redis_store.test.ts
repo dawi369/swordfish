@@ -67,6 +67,7 @@ describe.skipIf(!runRedisTests)("RedisStore", () => {
       }
       await redisStore.redis.hdel("bar:latest", testSymbol);
       await redisStore.redis.del(`snapshot:${testSymbol}`);
+      await redisStore.setOpenTicker(null);
       await redisStore.redis.srem("meta:index:snapshots", testSymbol);
     } catch {
       // Ignore cleanup failures when Redis is already unavailable.
@@ -106,7 +107,7 @@ describe.skipIf(!runRedisTests)("RedisStore", () => {
       expect(parsed.close).toBe(5005);
     });
 
-    test("writes bar to timeseries", async () => {
+    test("writes one-minute bars for all symbols", async () => {
       const now = Date.now();
       const bar: Bar = {
         symbol: testSymbol,
@@ -123,9 +124,49 @@ describe.skipIf(!runRedisTests)("RedisStore", () => {
 
       await redisStore.writeBar(bar);
 
-      const bars = await redisStore.getBarsRange(testSymbol, now - 1000, now + 1000, "1s");
+      const bars = await redisStore.getBarsRange(testSymbol, now - 60_000, now + 1000, "1m");
       expect(bars.length).toBeGreaterThan(0);
       expect(bars[bars.length - 1]!.close).toBe(5015);
+    });
+
+    test("writes one-second bars only for the open ticker", async () => {
+      const now = Date.now();
+      const openSymbol = "ESOPEN8";
+      const closedSymbol = "ESCLOSED8";
+      await redisStore.setOpenTicker(openSymbol);
+
+      await redisStore.writeBar({
+        symbol: openSymbol,
+        open: 5010,
+        high: 5020,
+        low: 5000,
+        close: 5015,
+        volume: 150,
+        trades: 75,
+        startTime: now,
+        endTime: now + 1000,
+      });
+      await redisStore.writeBar({
+        symbol: closedSymbol,
+        open: 6010,
+        high: 6020,
+        low: 6000,
+        close: 6015,
+        volume: 150,
+        trades: 75,
+        startTime: now,
+        endTime: now + 1000,
+      });
+
+      const openBars = await redisStore.getBarsRange(openSymbol, now - 1000, now + 1000, "1s");
+      const closedBars = await redisStore.getBarsRange(closedSymbol, now - 1000, now + 1000, "1s");
+      const closedMinuteBars = await redisStore.getBarsRange(closedSymbol, now - 60_000, now + 1000, "1m");
+
+      expect(openBars.length).toBeGreaterThan(0);
+      expect(closedBars).toHaveLength(0);
+      expect(closedMinuteBars.length).toBeGreaterThan(0);
+
+      await redisStore.setOpenTicker(null);
     });
   });
 

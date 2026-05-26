@@ -2,35 +2,44 @@
 
 ## Purpose
 
-Recovery exists to reduce gaps after reconnects and restarts. It is not long-term historical storage.
+Recovery exists to keep live runtime state understandable across restarts and
+reconnects. It is not long-term historical storage.
+
+There is no active provider REST backfill path for futures history. Redis and
+Postgres/Timescale are filled live. Historical fill waits for Massive futures
+flat-file access.
 
 ## Components
 
 - `backend/src/services/recovery_service.ts`
-  Orchestrates recovery and provider backfill.
+  Owns local recovery-store hydration and recovery checkpoints.
 - `backend/src/server/data/recovery_store.ts`
-  Local SQLite-backed recovery cache.
+  Local SQLite-backed reconnect cache.
 - `backend/src/server/data/redis_store.ts`
   Stores recovery checkpoints in Redis.
+- `backend/src/server/api/massive/ws_client.ts`
+  Buffers live bars during reconnect and flushes those live bars after the
+  socket is restored.
 
 ## Storage
 
 - Local SQLite path: `runtime/recovery/recovery.sqlite`
 - Redis checkpoint index: `meta:index:recovery_checkpoints`
-- Redis checkpoint keys: `recovery:checkpoint:{symbol}`
+- Redis checkpoint keys: `recovery:checkpoint:{timeframe}:{symbol}`
 
-## Manual Backfill
+## Disabled Backfill Endpoint
 
-```bash
-curl -X POST -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/recovery/backfill | jq
-```
+`POST /admin/recovery/backfill` remains authenticated, but it returns
+`410 Gone` with `status=disabled`.
 
-This runs provider backfill for currently subscribed symbols.
+This is deliberate. Futures history should not be repaired through Massive REST
+right now. The future historical path is flat-file ingestion into `bars_1m`.
 
 ## Boundaries
 
 - Recovery should not be used as an analytics warehouse.
-- Recovery depends on provider historical availability.
-- Current-minute exclusion is used for manual provider backfill to avoid unstable partial bars.
-- A failed recovery path should degrade data continuity, not prevent the backend from serving existing Redis data.
-
+- Reconnect handling should not call provider REST backfill.
+- Failed recovery checkpoint/cache writes should degrade continuity, not
+  prevent the backend from serving existing Redis data.
+- Future flat-file ingestion must write through `DurableBarWriter` and
+  `bars_1m`.

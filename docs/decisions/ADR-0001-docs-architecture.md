@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-MK3 had useful docs split across root docs, backend docs, and frontend docs. Backend/data-layer refinement needs a single navigation model and clear separation between current behavior, intended behavior, decisions, specs, runbooks, and roadmap risks.
+Swordfish had useful docs split across root docs, backend docs, and frontend docs. Backend/data-layer refinement needs a single navigation model and clear separation between current behavior, intended behavior, decisions, specs, runbooks, and roadmap risks.
 
 ## Decision
 

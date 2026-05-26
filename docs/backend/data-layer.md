@@ -31,15 +31,16 @@ The backend currently uses:
 - Range reads include query-time quality metadata: gap count, spike count,
   invalid OHLC count, zero/negative-volume counts, oldest/newest durable bar
   timestamps, and freshness.
-- Historical completeness before the durable-store migration point depends on
-  provider REST backfill or future Massive futures flat-file ingestion.
+- Historical completeness before live durable writes is intentionally absent
+  until Massive futures flat-file access exists. Provider REST backfill is not
+  an active production repair path.
 
 ## Storage Responsibilities
 
 | Store | Required | Responsibility |
 |---|---:|---|
 | Redis | yes | latest-week hot data, rolling time series, session state, snapshots, contracts, current job metadata |
-| SQLite recovery store | yes in runtime image | local reconnect/backfill recovery support |
+| SQLite recovery store | yes in runtime image | local reconnect buffer/checkpoint support |
 | Postgres/Timescale | yes for analytics runtime | durable `bars_1m`, job/recovery/provider/admin operational history, coverage diagnostics, future historical persistence |
 
 ## Runtime Writers
@@ -50,8 +51,8 @@ The backend currently uses:
   Coordinates live writes to Redis hot cache, local recovery state, and
   TimescaleDB `bars_1m` when enabled.
 - `backend/src/services/durable_bar_writer.ts`
-  Owns durable historical/bar-batch writes for provider backfill and future
-  flat-file ingestion, so non-live sources write through one typed boundary.
+  Owns durable bar-batch writes for live and future flat-file ingestion, so
+  non-live sources write through one typed boundary once flat files exist.
 - `backend/src/services/flat_file_ingestion_service.ts`
   Provides the future flat-file entrypoint. It does not parse Massive files yet;
   it routes parsed bars through `durable_bar_writer.ts` with `source=flat_file`.
@@ -73,12 +74,13 @@ The backend currently uses:
 - `backend/src/jobs/clear_daily.ts`
   Runs hot-store maintenance.
 - `backend/src/services/recovery_service.ts`
-  Coordinates provider backfill, local recovery state, Redis hot-cache rebuild
-  writes, and TimescaleDB `bars_1m` backfill upserts.
+  Coordinates local recovery state, Redis hot-cache rebuild writes, and
+  reconnect checkpoints. Provider REST backfill code is not part of the active
+  production path.
 - `backend/src/services/analytics_tool_service.ts`
   Provides typed read-only/dry-run service contracts for future AI tools:
   latest market state, symbol coverage explanations, range bars with quality
-  metadata, provider/backfill status, and safe hot-cache rebuild dry-run
+  metadata, historical availability status, and safe hot-cache rebuild dry-run
   diagnostics.
 
 ## Runtime Readers

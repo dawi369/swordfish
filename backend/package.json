@@ -8,23 +8,28 @@
     "start": "bun src/server/index.ts",
     "run:server": "bun src/server/index.ts",
     "test": "NODE_ENV=test bun test",
-    "test:smoke": "NODE_ENV=test bun test src/tests/logger.test.ts src/tests/massive_utils.test.ts src/tests/history_client.test.ts src/tests/recovery_service.test.ts src/tests/rest_client.test.ts src/tests/job_runtime.test.ts src/tests/data_quality.test.ts src/tests/market_data_writer.test.ts src/tests/durable_bar_writer.test.ts src/tests/flat_file_ingestion_service.test.ts src/tests/market_data_repository.test.ts src/tests/hot_cache_rebuilder.test.ts src/tests/analytics_tool_service.test.ts src/tests/production_data_layer_verifier.test.ts src/tests/sentry.test.ts src/tests/telemetry.test.ts src/tests/timescale_store.test.ts",
+    "test:smoke": "NODE_ENV=test bun test src/tests/logger.test.ts src/tests/massive_utils.test.ts src/tests/history_client.test.ts src/tests/recovery_service.test.ts src/tests/rest_client.test.ts src/tests/job_runtime.test.ts src/tests/trigger_scheduled_jobs.test.ts src/tests/job_observability.test.ts src/tests/data_quality.test.ts src/tests/market_data_writer.test.ts src/tests/durable_bar_writer.test.ts src/tests/flat_file_ingestion_service.test.ts src/tests/market_data_repository.test.ts src/tests/hot_cache_rebuilder.test.ts src/tests/analytics_tool_service.test.ts src/tests/production_data_layer_verifier.test.ts src/tests/sentry.test.ts src/tests/telemetry.test.ts src/tests/timescale_store.test.ts",
     "test:unit": "NODE_ENV=test bun test src/tests/logger.test.ts src/tests/front_month_resolver.test.ts src/tests/refresh_subscriptions.test.ts src/tests/recovery_service.test.ts src/tests/recovery_store.test.ts src/tests/history_client.test.ts src/tests/rest_client.test.ts src/tests/schedule_builder.test.ts src/tests/contract_provider.test.ts src/tests/contracts_calendar.test.ts src/tests/market_session.test.ts src/tests/front_month_job.unit.test.ts src/tests/snapshot_job.test.ts src/tests/ws_client.test.ts src/tests/massive_utils.test.ts src/tests/massive_snapshots.test.ts src/tests/clear_daily.test.ts src/tests/tickers.test.ts src/tests/futures_universe.test.ts src/tests/redis_store.test.ts src/tests/redis_store_contracts.test.ts",
     "test:redis": "NODE_ENV=test RUN_REDIS_TESTS=1 bun test src/tests/redis_store.test.ts src/tests/redis_store_contracts.test.ts",
-    "test:timescale": "NODE_ENV=test RUN_TIMESCALE_TESTS=1 bun test src/tests/timescale_store.test.ts",
+    "test:timescale": "sh -c 'NODE_ENV=test RUN_TIMESCALE_TESTS=1 ENABLE_TIMESCALE=true DISABLE_DURABLE_STORE=false DATABASE_URL=\"${DATABASE_URL:-postgres://postgres:postgres@localhost:5432/postgres}\" bun test src/tests/timescale_store.test.ts'",
     "test:live": "NODE_ENV=test RUN_LIVE_TESTS=1 bun test src/tests/active_tickers.test.ts src/tests/front_month_job.test.ts src/tests/session_rules.live.test.ts",
     "test:coverage": "NODE_ENV=test bun test --coverage",
     "test:all": "bun run test",
-    "verify:production-data-layer": "bun run dev_scripts/verify_production_data_layer.ts"
+    "verify:production-data-layer": "bun run dev_scripts/verify_production_data_layer.ts",
+    "trigger:dev": "trigger dev",
+    "trigger:deploy": "trigger deploy"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.3"
+    "@trigger.dev/build": "^4.4.6",
+    "@types/bun": "^1.3.3",
+    "trigger.dev": "^4.4.6"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
     "@sentry/bun": "^10.47.0",
+    "@trigger.dev/sdk": "^4.4.6",
     "cron": "^4.3.4",
     "ioredis": "^5.8.2",
     "postgres": "^3.4.7",

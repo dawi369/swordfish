@@ -8,7 +8,7 @@ export default function BacktestingLayout({ children }: { children: React.ReactN
         <div className="flex h-14 items-center px-4 sm:px-6 lg:px-8">
           <Link href="/" className="flex items-center">
             <Image
-              src="/mk3LogoTransparent.png"
+              src="/swordfishLogoTransparent.png"
               alt="Swordfish Logo"
               width={40}
               height={40}

@@ -41,6 +41,7 @@ HUB_ENABLE_SCHEDULED_JOBS=true
 HUB_BOOTSTRAP_FRONT_MONTHS_ON_STARTUP=true
 HUB_BOOTSTRAP_SNAPSHOTS_ON_STARTUP=true
 HUB_REBUILD_HOT_CACHE_ON_STARTUP=false
+HUB_DISABLE_PROVIDER_CONNECTION=false
 SENTRY_DSN=...
 SENTRY_ENVIRONMENT=production
 SENTRY_RELEASE=<git-sha-or-deploy-id>
@@ -53,8 +54,17 @@ SENTRY_TRACES_SAMPLE_RATE=0.1
   service context. High-value events include tags such as `run_id`, `job_name`,
   `symbol`, `ingestion_source`, and provider/recovery source where available.
 - The backend emits structured `metric` log events for critical counters and
-  gauges such as operational-run status, admin-command runs, data-write
-  failures, coverage stale counts, and spike counts.
+  gauges such as operational-run status, admin-command runs, direct
+  admin-action runs, data-write failures, coverage stale counts, and spike
+  counts.
+- Redis client errors emit `swordfish.redis.client_error`; Sentry captures are
+  throttled so a Redis outage remains visible without flooding Sentry.
+- Contract-provider calls emit `swordfish.provider_contract_fetch.*` metrics and
+  Sentry context for HTTP and network failures.
+- Direct admin mutations are recorded as durable `admin_action` operational
+  runs and emit `swordfish.admin_action.*` metrics. This includes manual Redis
+  clear, manual refresh triggers, disabled recovery backfill, and hot-cache
+  rebuilds.
 - Datadog can ingest those JSON logs without adding an in-process Datadog
   client. Add a direct Datadog client later only if log-derived metrics are not
   enough.
@@ -64,6 +74,17 @@ SENTRY_TRACES_SAMPLE_RATE=0.1
 See [../specs/observability-metrics.md](../specs/observability-metrics.md) for
 the log-derived metric catalog and initial Datadog dashboard/monitor contract.
 
+## Admin Security
+
+- Admin routes require `X-API-Key: $HUB_API_KEY` or
+  `Authorization: Bearer $HUB_API_KEY`.
+- Browser-origin admin requests are allowed only from
+  `HUB_ADMIN_ALLOWED_ORIGINS`. This allowlist is independent from public
+  `HUB_ALLOWED_ORIGINS`.
+- No-origin CLI/server requests are allowed through the API key path.
+- Admin requests use the admin rate-limit bucket, controlled by
+  `HUB_ADMIN_RATE_LIMIT_WINDOW_MS` and `HUB_ADMIN_RATE_LIMIT_MAX`.
+
 ## Local Startup
 
 ```bash
@@ -71,6 +92,15 @@ docker compose up -d redis
 cd backend
 bun install
 bun run dev
+```
+
+If another local project already owns port `6379`, run an isolated Redis Stack
+container on another port for backend integration tests:
+
+```bash
+docker run -d --name swordfish-redis-test -p 6380:6379 redis/redis-stack-server:latest
+cd backend
+REDIS_PORT=6380 bun run test:redis
 ```
 
 To exercise the durable Postgres/Timescale path locally, start the opt-in
@@ -106,6 +136,30 @@ Turn it on only after `DATABASE_URL` is configured and the durable `bars_1m`
 path has been verified in the target environment. Startup rebuild failures are
 recorded as durable operational runs and do not block the process from serving.
 
+For local infrastructure smoke tests that should not consume the account's one
+Massive WebSocket connection, start the backend with
+`HUB_DISABLE_PROVIDER_CONNECTION=true`. This mode is for Redis/Postgres health
+validation only: `/health`, `/admin/health`, and `/admin/ops` should work, but
+`massiveWs` will correctly report `disconnected` and no live ingestion,
+subscription refresh, or provider recovery is expected.
+
+Example durable health-only smoke:
+
+```bash
+cd backend
+HUB_PORT=4001 \
+REDIS_PORT=6380 \
+ENABLE_TIMESCALE=true \
+DISABLE_DURABLE_STORE=false \
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
+HUB_DISABLE_PROVIDER_CONNECTION=true \
+HUB_ENABLE_SCHEDULED_JOBS=false \
+HUB_BOOTSTRAP_FRONT_MONTHS_ON_STARTUP=false \
+HUB_BOOTSTRAP_SNAPSHOTS_ON_STARTUP=false \
+HUB_REBUILD_HOT_CACHE_ON_STARTUP=false \
+bun run start
+```
+
 ## Tests
 
 ```bash
@@ -138,7 +192,7 @@ curl -X POST -H "X-API-Key: $HUB_API_KEY" "http://localhost:3001/admin/hot-cache
 
 ## Production Data-Layer Verification
 
-After Railway Postgres is attached, `DATABASE_URL` is set on `mk3-backend`, and
+After Railway Postgres is attached, `DATABASE_URL` is set on `swordfish-backend`, and
 the backend has restarted, run:
 
 ```bash
@@ -157,6 +211,6 @@ This verifies the production acceptance gates for durable storage:
 - `/admin/durable/symbols` finds `bars_1m` rows
 - `/admin/durable/bars/latest?source=live_ws` finds at least one recent live row
 - `/admin/coverage` reports durable symbol counts
-- `/admin/durable/provider-outcomes` has useful `success` or `empty` backfill/provider outcomes
-- `/admin/durable/ingestion-runs` has successful provider/flat-file/recovery ingestion audit rows with bars
+- `/admin/recovery/backfill` returns `410` because provider REST backfill is disabled
+- future `/admin/durable/ingestion-runs` rows for historical fill come from flat-file ingestion, not provider REST backfill
 - `hot-cache-rebuild-dry-run` can hydrate bars from durable storage

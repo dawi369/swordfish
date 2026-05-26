@@ -1,4 +1,4 @@
-# ADR-0002: Redis As Hot Source Of Truth
+# ADR-0002: Redis As Hot Serving Layer
 
 ## Status
 
@@ -11,7 +11,9 @@ The current beta runtime is frontend, backend, and Redis. TimescaleDB code exist
 
 ## Decision
 
-Redis is the hot-path source of truth for the beta backend.
+Redis is the hot-path source of truth for the beta backend. For the current
+production direction, that means hot serving truth only; durable analytics truth
+belongs in Postgres/Timescale-shaped storage.
 
 Redis owns:
 
@@ -25,7 +27,9 @@ Redis owns:
 - job status
 - recovery checkpoints
 
-TimescaleDB remains deferred and optional.
+Durable Postgres/Timescale storage is now active when `DATABASE_URL` is present.
+It is the migration path for normalized bars, ingestion audit records, provider
+outcomes, and future flat-file backfills.
 
 ## Consequences
 

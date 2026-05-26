@@ -6,22 +6,25 @@ import {
 } from "@/server/api/rest_client.js";
 import { redisStore } from "@/server/data/redis_store.js";
 import { timescaleStore } from "@/server/data/timescale_store.js";
-import { recoveryService } from "@/services/recovery_service.js";
 import { hotCacheRebuilder } from "@/services/hot_cache_rebuilder.js";
 import { marketDataRepository } from "@/services/market_data_repository.js";
+import { dailyClearJob } from "@/jobs/clear_daily.js";
 import { frontMonthJob } from "@/jobs/front_month_job.js";
 import { monthlySubscriptionJob } from "@/jobs/refresh_subscriptions.js";
+import { telemetry } from "@/utils/telemetry.js";
 
 function createRequest(
   path: string,
   init?: {
     method?: string;
     headers?: Record<string, string>;
+    body?: string;
   },
 ): Request {
   return new Request(`http://localhost${path}`, {
     method: init?.method ?? "GET",
     headers: init?.headers,
+    body: init?.body,
   });
 }
 
@@ -979,6 +982,81 @@ describe("REST request handler", () => {
     expect(symbolPayload.symbol).toBe("ESH9");
   });
 
+  test("sets and reads the public open ticker for 1s Redis retention", async () => {
+    const setSpy = spyOn(redisStore, "setOpenTicker").mockResolvedValue();
+    const getSpy = spyOn(redisStore, "getOpenTicker").mockResolvedValue("ESH6");
+
+    const setResponse = await handleRequest(
+      "POST",
+      "/bars/open-ticker",
+      createRequest("/bars/open-ticker", {
+        method: "POST",
+        headers: {
+          Origin: "http://localhost:3010",
+        },
+        body: JSON.stringify({ symbol: "esh6" }),
+      }),
+    );
+    const setPayload = (await setResponse.json()) as any;
+
+    const getResponse = await handleRequest(
+      "GET",
+      "/bars/open-ticker",
+      createRequest("/bars/open-ticker"),
+    );
+    const getPayload = (await getResponse.json()) as any;
+    const clearResponse = await handleRequest(
+      "DELETE",
+      "/bars/open-ticker",
+      createRequest("/bars/open-ticker", {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:3010",
+        },
+      }),
+    );
+    const clearPayload = (await clearResponse.json()) as any;
+
+    expect(setResponse.status).toBe(200);
+    expect(setResponse.headers.get("Access-Control-Allow-Methods")).toContain("DELETE");
+    expect(setSpy).toHaveBeenCalledWith("ESH6");
+    expect(setPayload.symbol).toBe("ESH6");
+    expect(getResponse.status).toBe(200);
+    expect(getSpy).toHaveBeenCalled();
+    expect(getPayload.symbol).toBe("ESH6");
+    expect(clearResponse.status).toBe(200);
+    expect(setSpy).toHaveBeenCalledWith(null);
+    expect(clearPayload.symbol).toBeNull();
+  });
+
+  test("rejects open ticker mutations without an allowed browser origin", async () => {
+    const setSpy = spyOn(redisStore, "setOpenTicker").mockResolvedValue();
+
+    const noOriginResponse = await handleRequest(
+      "POST",
+      "/bars/open-ticker",
+      createRequest("/bars/open-ticker", {
+        method: "POST",
+        body: JSON.stringify({ symbol: "ESH6" }),
+      }),
+    );
+    const badOriginResponse = await handleRequest(
+      "POST",
+      "/bars/open-ticker",
+      createRequest("/bars/open-ticker", {
+        method: "POST",
+        headers: {
+          Origin: "https://evil.example",
+        },
+        body: JSON.stringify({ symbol: "ESH6" }),
+      }),
+    );
+
+    expect(noOriginResponse.status).toBe(403);
+    expect(badOriginResponse.status).toBe(403);
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
   test("returns 404 for unknown latest/session/snapshot resources", async () => {
     spyOn(redisStore, "getLatest").mockResolvedValue(null);
     spyOn(redisStore, "getSession").mockResolvedValue(null);
@@ -1094,7 +1172,21 @@ describe("REST request handler", () => {
   });
 
   test("rejects browser-origin admin requests unless explicitly allowed", async () => {
-    const response = await handleRequest(
+    setMassiveClientForTesting({
+      getSubscriptions: () => [],
+    } as any);
+
+    const allowedResponse = await handleRequest(
+      "GET",
+      "/admin/subscriptions",
+      createRequest("/admin/subscriptions", {
+        headers: {
+          "X-API-Key": Bun.env.HUB_API_KEY ?? "",
+          Origin: "http://localhost:3010",
+        },
+      }),
+    );
+    const rejectedResponse = await handleRequest(
       "GET",
       "/admin/subscriptions",
       createRequest("/admin/subscriptions", {
@@ -1105,7 +1197,11 @@ describe("REST request handler", () => {
       }),
     );
 
-    expect(response.status).toBe(403);
+    expect(allowedResponse.status).toBe(200);
+    expect(allowedResponse.headers.get("Access-Control-Allow-Origin")).toBe(
+      "http://localhost:3010",
+    );
+    expect(rejectedResponse.status).toBe(403);
   });
 
   test("rejects unauthenticated admin recovery backfill requests", async () => {
@@ -1118,31 +1214,8 @@ describe("REST request handler", () => {
     expect(response.status).toBe(401);
   });
 
-  test("runs manual recovery backfill for authorized requests", async () => {
-    spyOn(redisStore, "getSubscribedSymbols").mockResolvedValue(["ESH6", "NQH6"]);
-    const backfillSpy = spyOn(
-      recoveryService,
-      "backfillSymbolsFromProvider",
-    ).mockResolvedValue([
-      {
-        symbol: "ESH6",
-        source: "manual",
-        startMs: 1,
-        endMs: 2,
-        providerBars: 3,
-        checkpointBefore: 0,
-        checkpointAfter: 1,
-      },
-      {
-        symbol: "NQH6",
-        source: "manual",
-        startMs: 1,
-        endMs: 2,
-        providerBars: 4,
-        checkpointBefore: 0,
-        checkpointAfter: 1,
-      },
-    ]);
+  test("returns disabled for authorized manual recovery backfill requests", async () => {
+    const metricSpy = spyOn(telemetry, "metric").mockImplementation(() => {});
 
     const response = await handleRequest(
       "POST",
@@ -1156,30 +1229,23 @@ describe("REST request handler", () => {
     );
     const payload = (await response.json()) as any;
 
-    expect(response.status).toBe(200);
-    expect(backfillSpy).toHaveBeenCalledWith(["ESH6", "NQH6"], {
-      source: "manual",
-      excludeCurrentMinute: true,
+    expect(response.status).toBe(410);
+    expect(payload.status).toBe("disabled");
+    expect(payload.providerBars).toBe(0);
+    expect(payload.message).toContain("Provider REST backfill is disabled");
+    expect(metricSpy).toHaveBeenCalledWith({
+      name: "swordfish.admin_action.run",
+      type: "counter",
+      value: 1,
+      tags: {
+        action: "recovery-backfill-disabled",
+        status: "success",
+      },
     });
-    expect(payload.providerBars).toBe(7);
   });
 
-  test("runs targeted manual recovery backfill for authorized requests", async () => {
+  test("does not resolve symbols for targeted manual recovery backfill requests", async () => {
     const getSubscribedSpy = spyOn(redisStore, "getSubscribedSymbols");
-    const backfillSpy = spyOn(
-      recoveryService,
-      "backfillSymbolsFromProvider",
-    ).mockResolvedValue([
-      {
-        symbol: "ESH6",
-        source: "manual",
-        startMs: 1,
-        endMs: 2,
-        providerBars: 3,
-        checkpointBefore: 0,
-        checkpointAfter: 1,
-      },
-    ]);
 
     const response = await handleRequest(
       "POST",
@@ -1193,14 +1259,10 @@ describe("REST request handler", () => {
     );
     const payload = (await response.json()) as any;
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(410);
     expect(getSubscribedSpy).not.toHaveBeenCalled();
-    expect(backfillSpy).toHaveBeenCalledWith(["ESH6"], {
-      source: "manual",
-      excludeCurrentMinute: true,
-    });
-    expect(payload.symbols).toEqual(["ESH6"]);
-    expect(payload.providerBars).toBe(3);
+    expect(payload.status).toBe("disabled");
+    expect(payload.providerBars).toBe(0);
   });
 
   test("returns not found for unknown routes and handles refresh-subscription failures", async () => {
@@ -1225,6 +1287,31 @@ describe("REST request handler", () => {
     expect(notFound.status).toBe(404);
     expect(refresh.status).toBe(500);
     expect(((await refresh.json()) as any).details).toContain("refresh failed");
+  });
+
+  test("allows Trigger.dev to run scheduled Redis maintenance without forcing a clear", async () => {
+    const runClearSpy = spyOn(dailyClearJob, "runClear").mockResolvedValue();
+    spyOn(dailyClearJob, "getStatus").mockReturnValue({
+      lastRunTime: 1,
+      lastSuccess: true,
+      lastError: null,
+      clearedKeys: 0,
+      totalRuns: 1,
+    } as any);
+
+    const response = await handleRequest(
+      "POST",
+      "/admin/clear-redis",
+      createRequest("/admin/clear-redis?force=false", {
+        method: "POST",
+        headers: { "X-API-Key": Bun.env.HUB_API_KEY ?? "" },
+      }),
+    );
+    const payload = (await response.json()) as any;
+
+    expect(response.status).toBe(200);
+    expect(runClearSpy).toHaveBeenCalledWith(false, "trigger.dev");
+    expect(payload.message).toBe("Scheduled Redis maintenance triggered");
   });
 
   test("rate limits repeated public requests from the same client", async () => {

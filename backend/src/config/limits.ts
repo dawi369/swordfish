@@ -1,6 +1,7 @@
 export const LIMITS = {
   // RedisTimeSeries retention
   redisTsRetentionMs: 7 * 24 * 60 * 60 * 1000, // 7 days
+  redisOpenTicker1sRetentionMs: 60 * 1000, // 60 seconds
 
   // Redis operation batching
   redisScanBatchSize: 100,

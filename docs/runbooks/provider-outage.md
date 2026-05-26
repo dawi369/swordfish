@@ -25,12 +25,12 @@ curl -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/front-months | jq
 
 ## Recovery
 
-After provider recovers:
+After provider recovers, refresh runtime state. Do not run provider REST
+backfill for futures history; the current production contract has no active
+historical backfill path until Massive futures flat files are available.
 
 ```bash
 curl -X POST -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/refresh-subscriptions | jq
 curl -X POST -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/refresh-snapshots | jq
 curl -X POST -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/refresh-front-months | jq
-curl -X POST -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/recovery/backfill | jq
 ```
-

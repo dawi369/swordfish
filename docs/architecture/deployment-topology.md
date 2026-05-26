@@ -4,9 +4,9 @@ Railway is the intended production target.
 
 ## Services
 
-- `mk3-frontend`
+- `swordfish-frontend`
   Root directory: `/frontend`
-- `mk3-backend`
+- `swordfish-backend`
   Root directory: `/backend`
 - Redis service
   Private networking only.
@@ -59,7 +59,7 @@ Important variables:
 - Railway branch deployments currently come from `main`.
 - Frontend production builds run `next build`; TypeScript failures block deploy.
 - Backend deploy health depends on `/health` returning healthy within Railway's retry window.
-- Durable analytics are enabled when `DATABASE_URL` is attached to `mk3-backend`;
+- Durable analytics are enabled when `DATABASE_URL` is attached to `swordfish-backend`;
   Redis remains the hot serving layer.
 
 See [../runbooks/railway-deploy.md](../runbooks/railway-deploy.md) and [../runbooks/failed-build-debugging.md](../runbooks/failed-build-debugging.md).

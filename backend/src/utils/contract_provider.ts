@@ -9,6 +9,11 @@ import { isOutrightTickerForRoot } from "@/utils/contracts_calendar.js";
 import { appendFileSync, existsSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import {
+  captureExceptionWithContext,
+  captureMessageWithContext,
+} from "@/utils/sentry.js";
+import { telemetry } from "@/utils/telemetry.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -90,6 +95,30 @@ export class ContractProvider {
           console.error(
             `[ContractProvider] Failed to fetch contracts for ${root}: ${response.status}`
           );
+          telemetry.metric({
+            name: "swordfish.provider_contract_fetch.run",
+            type: "counter",
+            value: 1,
+            tags: {
+              provider: "massive",
+              root,
+              status: "failed",
+              http_status: response.status,
+            },
+          });
+          captureMessageWithContext("Provider contract fetch failed", {
+            level: "warning",
+            tags: {
+              provider: "massive",
+              root,
+              status: "failed",
+              http_status: response.status,
+            },
+            extra: {
+              pageCount,
+              maxPages: MAX_PAGES_PER_TICKER,
+            },
+          });
           break;
         }
 
@@ -99,6 +128,16 @@ export class ContractProvider {
         // Empty results on first page = invalid ticker
         if (pageCount === 1 && results.length === 0) {
           console.log(`[ContractProvider] Empty response for ${root} - invalid ticker`);
+          telemetry.metric({
+            name: "swordfish.provider_contract_fetch.run",
+            type: "counter",
+            value: 1,
+            tags: {
+              provider: "massive",
+              root,
+              status: "empty",
+            },
+          });
           this.logInvalidTicker(root);
           break;
         }
@@ -156,6 +195,27 @@ export class ContractProvider {
       }
     } catch (error) {
       console.error(`[ContractProvider] Error fetching contracts for ${root}:`, error);
+      telemetry.metric({
+        name: "swordfish.provider_contract_fetch.run",
+        type: "counter",
+        value: 1,
+        tags: {
+          provider: "massive",
+          root,
+          status: "failed",
+        },
+      });
+      captureExceptionWithContext(error, {
+        tags: {
+          provider: "massive",
+          root,
+          status: "failed",
+        },
+        extra: {
+          pageCount,
+          maxPages: MAX_PAGES_PER_TICKER,
+        },
+      });
       throw error;
     }
 
@@ -168,6 +228,25 @@ export class ContractProvider {
     this.cache.set(root, {
       fetchedAt: Date.now(),
       contracts,
+    });
+    telemetry.metric({
+      name: "swordfish.provider_contract_fetch.run",
+      type: "counter",
+      value: 1,
+      tags: {
+        provider: "massive",
+        root,
+        status: contracts.length > 0 ? "success" : "empty",
+      },
+    });
+    telemetry.metric({
+      name: "swordfish.provider_contract_fetch.contracts",
+      type: "gauge",
+      value: contracts.length,
+      tags: {
+        provider: "massive",
+        root,
+      },
     });
 
     return contracts;

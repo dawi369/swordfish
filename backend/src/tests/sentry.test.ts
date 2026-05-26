@@ -21,7 +21,7 @@ describe("Sentry configuration", () => {
       environment: "production",
       release: "abc123",
       tracesSampleRate: 0.25,
-      serverName: "mk3-backend",
+      serverName: "swordfish-backend",
     });
   });
 });

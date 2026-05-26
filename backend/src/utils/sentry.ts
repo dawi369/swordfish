@@ -19,7 +19,7 @@ export function buildSentryInitOptions(env: Record<string, string | undefined>) 
     environment: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV ?? "development",
     release: env.SENTRY_RELEASE,
     tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? "0.1"),
-    serverName: "mk3-backend",
+    serverName: "swordfish-backend",
   };
 }
 
@@ -60,7 +60,7 @@ export function captureExceptionWithContext(
       }
     }
     if (context.extra) {
-      scope.setContext("mk3", context.extra);
+      scope.setContext("swordfish", context.extra);
     }
     Sentry.captureException(error);
   });
@@ -81,7 +81,7 @@ export function captureMessageWithContext(
       }
     }
     if (context.extra) {
-      scope.setContext("mk3", context.extra);
+      scope.setContext("swordfish", context.extra);
     }
     Sentry.captureMessage(message, context.level);
   });

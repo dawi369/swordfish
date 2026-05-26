@@ -14,7 +14,7 @@ describe("telemetry", () => {
     const logSpy = spyOn(logger, "info").mockImplementation(() => {});
 
     telemetry.metric({
-      name: "mk3.test.metric",
+      name: "swordfish.test.metric",
       type: "counter",
       value: 1,
     });
@@ -27,7 +27,7 @@ describe("telemetry", () => {
     const logSpy = spyOn(logger, "info").mockImplementation(() => {});
 
     telemetry.metric({
-      name: "mk3.test.metric",
+      name: "swordfish.test.metric",
       type: "gauge",
       value: 2,
       timestamp: 123,
@@ -40,7 +40,7 @@ describe("telemetry", () => {
     });
 
     expect(logSpy).toHaveBeenCalledWith("metric", {
-      metric: "mk3.test.metric",
+      metric: "swordfish.test.metric",
       metricType: "gauge",
       value: 2,
       tags: {

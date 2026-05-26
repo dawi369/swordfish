@@ -8,11 +8,13 @@ These docs describe current backend behavior verified against `backend/src`.
    Source-of-truth rules and persistence model.
 2. [redis-keyspace.md](./redis-keyspace.md)
    Redis keys, data types, writers, readers, and retention.
-3. [ingestion-pipeline.md](./ingestion-pipeline.md)
+3. [redis-timescale-bar-flow.md](./redis-timescale-bar-flow.md)
+   Current Redis/Postgres structure and the flow of a live bar.
+4. [ingestion-pipeline.md](./ingestion-pipeline.md)
    Massive ingestion, normalization, Redis writes, and fanout.
-4. [api.md](./api.md)
+5. [api.md](./api.md)
    Public and admin REST/WebSocket contracts.
-5. [operations.md](./operations.md)
+6. [operations.md](./operations.md)
    Local startup, checks, and backend-specific operations.
 
 ## Reference
@@ -34,4 +36,3 @@ These docs describe current backend behavior verified against `backend/src`.
 - `backend/src/jobs/*`
 - `backend/src/utils/contract_provider.ts`
 - `backend/src/utils/front_month_resolver.ts`
-

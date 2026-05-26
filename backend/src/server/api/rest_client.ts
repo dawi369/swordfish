@@ -20,8 +20,7 @@ import { snapshotJob } from "@/jobs/snapshot_job.js";
 import type { MassiveWSClient } from "@/server/api/massive/ws_client.js";
 import type { Server, ServerWebSocket } from "bun";
 import { logger } from "@/utils/logger.js";
-import { recoveryService } from "@/services/recovery_service.js";
-import { Sentry } from "@/utils/sentry.js";
+import { Sentry, captureExceptionWithContext } from "@/utils/sentry.js";
 import { hotCacheRebuilder } from "@/services/hot_cache_rebuilder.js";
 import { marketDataRepository } from "@/services/market_data_repository.js";
 import type { DurableStoreStats } from "@/server/data/timescale_store.js";
@@ -42,7 +41,7 @@ export function setMassiveClientForTesting(client: MassiveWSClient | null): void
 
 // Helper for CORS headers
 const baseCorsHeaders = {
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Key",
   Vary: "Origin",
 };
@@ -64,10 +63,12 @@ const ALLOWED_ORIGINS = new Set(
 );
 
 const ADMIN_ALLOWED_ORIGINS = new Set(
-  (HUB_ADMIN_ALLOWED_ORIGINS?.split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean) ?? []
-  ).map((origin) => origin.replace(/\/+$/, "")),
+  [
+    ...(HUB_ADMIN_ALLOWED_ORIGINS?.split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean) ?? []),
+    ...(Bun.env.NODE_ENV === "production" ? [] : DEV_ALLOWED_ORIGINS),
+  ].map((origin) => origin.replace(/\/+$/, "")),
 );
 
 const ALLOWED_TIMEFRAMES = new Set([
@@ -102,6 +103,11 @@ interface AdminCommandDefinition {
   id: string;
   label: string;
   description: string;
+}
+
+interface AdminActionOptions {
+  name: string;
+  metadata?: Record<string, unknown>;
 }
 
 type AdminOpsStatus = "ok" | "warming" | "degraded";
@@ -495,7 +501,7 @@ async function buildAdminOpsPayload() {
         : "ok";
 
   telemetry.metric({
-    name: "mk3.admin_ops.status",
+    name: "swordfish.admin_ops.status",
     type: "gauge",
     value: status === "ok" ? 1 : status === "warming" ? 0.5 : 0,
     tags: {
@@ -507,12 +513,12 @@ async function buildAdminOpsPayload() {
     },
   });
   telemetry.metric({
-    name: "mk3.data_coverage.stale_symbols",
+    name: "swordfish.data_coverage.stale_symbols",
     type: "gauge",
     value: coverage.summary.staleSymbols,
   });
   telemetry.metric({
-    name: "mk3.data_coverage.spike_symbols",
+    name: "swordfish.data_coverage.spike_symbols",
     type: "gauge",
     value: coverage.summary.spikeSymbols,
   });
@@ -768,7 +774,7 @@ async function runAdminCommand(commandId: string) {
       },
     });
     telemetry.metric({
-      name: "mk3.admin_command.run",
+      name: "swordfish.admin_command.run",
       type: "counter",
       value: 1,
       tags: {
@@ -792,6 +798,86 @@ async function runAdminCommand(commandId: string) {
 
   await persistAdminCommandRun(run);
   return run;
+}
+
+async function runAuditedAdminAction<T>(
+  options: AdminActionOptions,
+  action: (runId: string) => Promise<T>,
+): Promise<T> {
+  const run = await startOperationalRun({
+    runType: "admin_action",
+    name: options.name,
+    trigger: "api",
+    metadata: options.metadata,
+  });
+
+  telemetry.breadcrumb("admin_action", "started", {
+    action: options.name,
+    runId: run.runId,
+    metadata: options.metadata,
+  });
+  telemetry.metric({
+    name: "swordfish.admin_action.started",
+    type: "counter",
+    value: 1,
+    tags: {
+      action: options.name,
+    },
+  });
+
+  try {
+    const result = await action(run.runId);
+    await finishOperationalRun(run, "success", {
+      metadata: options.metadata,
+    });
+    telemetry.breadcrumb("admin_action", "finished", {
+      action: options.name,
+      runId: run.runId,
+      status: "success",
+    });
+    telemetry.metric({
+      name: "swordfish.admin_action.run",
+      type: "counter",
+      value: 1,
+      tags: {
+        action: options.name,
+        status: "success",
+      },
+    });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    captureExceptionWithContext(error, {
+      tags: {
+        run_type: "admin_action",
+        action: options.name,
+        run_id: run.runId,
+      },
+      extra: {
+        metadata: options.metadata,
+      },
+    });
+    await finishOperationalRun(run, "failed", {
+      error: message,
+      metadata: options.metadata,
+    });
+    telemetry.breadcrumb("admin_action", "finished", {
+      action: options.name,
+      runId: run.runId,
+      status: "failed",
+      error: message,
+    });
+    telemetry.metric({
+      name: "swordfish.admin_action.run",
+      type: "counter",
+      value: 1,
+      tags: {
+        action: options.name,
+        status: "failed",
+      },
+    });
+    throw error;
+  }
 }
 
 function parseTimeframe(value: string | null, fallback: string): string {
@@ -832,9 +918,22 @@ function isAdminOriginAllowed(origin: string | null): boolean {
   return ADMIN_ALLOWED_ORIGINS.has(origin.replace(/\/+$/, ""));
 }
 
+function isCorsOriginAllowedForPath(path: string, origin: string | null): boolean {
+  if (!origin) return true;
+  return path.startsWith("/admin")
+    ? isAdminOriginAllowed(origin)
+    : isOriginAllowed(origin);
+}
+
+function isAllowedBrowserOrigin(req: Request): boolean {
+  const origin = req.headers.get("Origin");
+  return Boolean(origin && isOriginAllowed(origin));
+}
+
 function buildCorsHeaders(req?: Request): Record<string, string> {
   const origin = req?.headers.get("Origin");
-  if (origin && isOriginAllowed(origin)) {
+  const path = req ? new URL(req.url).pathname : "";
+  if (origin && isCorsOriginAllowedForPath(path, origin)) {
     return {
       ...baseCorsHeaders,
       "Access-Control-Allow-Origin": origin,
@@ -976,11 +1075,8 @@ export function startHubRESTApi(client: MassiveWSClient): Promise<void> {
       const method = req.method;
       const origin = req.headers.get("Origin");
 
-      if (origin && !isOriginAllowed(origin)) {
+      if (origin && !isCorsOriginAllowedForPath(path, origin)) {
         return errorResponse("Origin not allowed", 403, req);
-      }
-      if (path.startsWith("/admin") && origin && !isAdminOriginAllowed(origin)) {
-        return errorResponse("Admin browser origin not allowed", 403, req);
       }
 
       // Handle WebSocket upgrade
@@ -1086,11 +1182,8 @@ export async function handleRequest(
   const fail = (message: string, status = 500) =>
     errorResponse(message, status, req, rateLimitHeaders);
 
-  if (origin && !isOriginAllowed(origin)) {
+  if (origin && !isCorsOriginAllowedForPath(path, origin)) {
     return fail("Origin not allowed", 403);
-  }
-  if (path.startsWith("/admin") && origin && !isAdminOriginAllowed(origin)) {
-    return fail("Admin browser origin not allowed", 403);
   }
   if (!rateLimit.allowed) {
     return fail("Too Many Requests", 429);
@@ -1181,6 +1274,56 @@ export async function handleRequest(
   if (method === "GET" && path === "/symbols") {
     const symbols = await redisStore.getSymbols();
     return respond({ symbols, count: symbols.length });
+  }
+
+  if (method === "GET" && path === "/bars/open-ticker") {
+    const symbol = await redisStore.getOpenTicker();
+    return respond({ symbol });
+  }
+
+  if (method === "POST" && path === "/bars/open-ticker") {
+    if (!isAllowedBrowserOrigin(req)) {
+      return fail("Allowed browser origin required", 403);
+    }
+
+    const body = await req.json().catch(() => ({})) as { symbol?: unknown };
+    const requestedSymbol =
+      typeof body.symbol === "string"
+        ? body.symbol
+        : url.searchParams.get("symbol");
+    const symbol = requestedSymbol?.trim().toUpperCase();
+
+    if (!symbol) {
+      return fail("symbol is required", 400);
+    }
+
+    await redisStore.setOpenTicker(symbol);
+    telemetry.metric({
+      name: "swordfish.open_ticker.set",
+      type: "counter",
+      value: 1,
+      tags: {
+        action: "set",
+      },
+    });
+    return respond({ symbol });
+  }
+
+  if (method === "DELETE" && path === "/bars/open-ticker") {
+    if (!isAllowedBrowserOrigin(req)) {
+      return fail("Allowed browser origin required", 403);
+    }
+
+    await redisStore.setOpenTicker(null);
+    telemetry.metric({
+      name: "swordfish.open_ticker.set",
+      type: "counter",
+      value: 1,
+      tags: {
+        action: "clear",
+      },
+    });
+    return respond({ symbol: null });
   }
 
   // Session data endpoint (public - no auth required)
@@ -1493,20 +1636,41 @@ export async function handleRequest(
     }
 
     if (method === "POST" && path === "/admin/clear-redis") {
-      // Manual clear always uses force=true to bypass daily check
-      await dailyClearJob.runClear(true, "manual");
-      const status = dailyClearJob.getStatus();
-      return respond({ message: "Manual clear triggered", status });
+      const force = url.searchParams.get("force") !== "false";
+      const trigger = force ? "manual" : "trigger.dev";
+      const payload = await runAuditedAdminAction(
+        {
+          name: "clear-redis",
+          metadata: { force },
+        },
+        async () => {
+          await dailyClearJob.runClear(force, trigger);
+          const status = dailyClearJob.getStatus();
+          return {
+            message: force
+              ? "Manual clear triggered"
+              : "Scheduled Redis maintenance triggered",
+            status,
+          };
+        },
+      );
+      return respond(payload);
     }
 
     if (method === "POST" && path === "/admin/refresh-subscriptions") {
       try {
-        await monthlySubscriptionJob.runRefresh("manual");
-        const status = monthlySubscriptionJob.getStatus();
-        return respond({
-          message: "Manual subscription refresh triggered",
-          status,
-        });
+        const payload = await runAuditedAdminAction(
+          { name: "refresh-subscriptions" },
+          async () => {
+            await monthlySubscriptionJob.runRefresh("manual");
+            const status = monthlySubscriptionJob.getStatus();
+            return {
+              message: "Manual subscription refresh triggered",
+              status,
+            };
+          },
+        );
+        return respond(payload);
       } catch (err) {
         return respond(
           {
@@ -1535,66 +1699,86 @@ export async function handleRequest(
     }
 
     if (method === "POST" && path === "/admin/refresh-front-months") {
-      // Run in background to prevent timeout
-      frontMonthJob.runRefresh("manual").catch((err) => {
-        console.error("[FrontMonthJob] Background refresh failed:", err);
-      });
+      const payload = await runAuditedAdminAction(
+        { name: "refresh-front-months" },
+        async () => {
+          // Run in background to prevent timeout
+          frontMonthJob.runRefresh("manual").catch((err) => {
+            console.error("[FrontMonthJob] Background refresh failed:", err);
+          });
 
-      return respond({
-        message: "Front month refresh started (running in background)",
-        status: frontMonthJob.getStatus(),
-        cache: frontMonthJob.getCache(), // Return current cache immediately
-      });
+          return {
+            message: "Front month refresh started (running in background)",
+            status: frontMonthJob.getStatus(),
+            cache: frontMonthJob.getCache(), // Return current cache immediately
+          };
+        },
+      );
+      return respond(payload);
     }
 
     if (method === "POST" && path === "/admin/refresh-snapshots") {
-      // Run job in background (don't await) - prevents HTTP timeout
-      snapshotJob.runRefresh("manual").catch((err) => {
-        console.error("[SnapshotJob] Background refresh failed:", err);
-      });
+      const payload = await runAuditedAdminAction(
+        { name: "refresh-snapshots" },
+        async () => {
+          // Run job in background (don't await) - prevents HTTP timeout
+          snapshotJob.runRefresh("manual").catch((err) => {
+            console.error("[SnapshotJob] Background refresh failed:", err);
+          });
 
-      return respond({
-        message: "Snapshot refresh started (running in background)",
-        status: snapshotJob.getStatus(),
-      });
+          return {
+            message: "Snapshot refresh started (running in background)",
+            status: snapshotJob.getStatus(),
+          };
+        },
+      );
+      return respond(payload);
     }
 
     if (method === "POST" && path === "/admin/recovery/backfill") {
-      const requestedSymbols = url.searchParams
-        .get("symbols")
-        ?.split(",")
-        .map((symbol) => symbol.trim().toUpperCase())
-        .filter(Boolean);
-      const symbols = requestedSymbols?.length
-        ? Array.from(new Set(requestedSymbols))
-        : await redisStore.getSubscribedSymbols();
-      const results = await recoveryService.backfillSymbolsFromProvider(symbols, {
-        source: "manual",
-        excludeCurrentMinute: true,
-      });
-
-      return respond({
-        message: "Manual recovery backfill completed",
-        symbols,
-        results,
-        providerBars: results.reduce((sum, result) => sum + result.providerBars, 0),
-      });
+      const payload = await runAuditedAdminAction(
+        {
+          name: "recovery-backfill-disabled",
+          metadata: {
+            symbols: url.searchParams.get("symbols") ?? null,
+            reason: "provider_rest_backfill_disabled",
+          },
+        },
+        async () => ({
+          message:
+            "Provider REST backfill is disabled for futures. Timescale/Postgres is filled live; historical fill waits for Massive futures flat files.",
+          status: "disabled",
+          providerBars: 0,
+          nextAction:
+            "Use live ingestion now; add flat-file ingestion when futures files are available.",
+        }),
+      );
+      return respond(payload, 410);
     }
 
     if (method === "POST" && path === "/admin/hot-cache/rebuild") {
       const dryRun = url.searchParams.get("dryRun") !== "false";
-      const symbols = await redisStore.getSubscribedSymbols();
-      const result = await hotCacheRebuilder.rebuildLatestWindow(symbols, {
-        dryRun,
-      });
+      const payload = await runAuditedAdminAction(
+        {
+          name: "hot-cache-rebuild",
+          metadata: { dryRun },
+        },
+        async () => {
+          const symbols = await redisStore.getSubscribedSymbols();
+          const result = await hotCacheRebuilder.rebuildLatestWindow(symbols, {
+            dryRun,
+          });
 
-      return respond({
-        message: dryRun
-          ? "Hot-cache rebuild dry run completed"
-          : "Hot-cache rebuild completed",
-        dryRun,
-        result,
-      });
+          return {
+            message: dryRun
+              ? "Hot-cache rebuild dry run completed"
+              : "Hot-cache rebuild completed",
+            dryRun,
+            result,
+          };
+        },
+      );
+      return respond(payload);
     }
   }
 

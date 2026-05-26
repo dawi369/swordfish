@@ -59,7 +59,7 @@ export class MarketDataWriter {
 
     if (Object.keys(result.errors).length > 0) {
       telemetry.metric({
-        name: "mk3.market_data.write_partial_failure",
+        name: "swordfish.market_data.write_partial_failure",
         type: "counter",
         value: 1,
         tags: {
@@ -86,7 +86,7 @@ export class MarketDataWriter {
       });
     } else {
       telemetry.metric({
-        name: "mk3.market_data.write_success",
+        name: "swordfish.market_data.write_success",
         type: "counter",
         value: 1,
         tags: {

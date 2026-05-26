@@ -1,7 +1,7 @@
 # Frontend Railway configuration
 #
 # Dashboard-only settings still required for this service:
-# - Source repo: dawi369/mk3
+# - Source repo: dawi369/swordfish
 # - Root directory: /frontend
 # - Production branch: main
 # - Public domain: swordfsh.app

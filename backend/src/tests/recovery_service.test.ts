@@ -1,5 +1,4 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import { durableBarWriter } from "@/services/durable_bar_writer.js";
 import { RecoveryService } from "@/services/recovery_service.js";
 import type { Bar } from "@/types/common.types.js";
 import {
@@ -31,9 +30,6 @@ describe("RecoveryService", () => {
       getAllRecoveryCheckpoints: async () => ({}),
       writeBarsForRecovery: async () => undefined,
     } as any,
-    {
-      fetchBars: async () => [],
-    },
   );
 
   test("plans a full retention window when no checkpoint exists", () => {
@@ -130,9 +126,6 @@ describe("RecoveryService", () => {
         getAllRecoveryCheckpoints: async () => ({}),
         writeBarsForRecovery: async () => undefined,
       } as any,
-      {
-        fetchBars: async () => [],
-      },
     );
 
     const firstBar: Bar = {
@@ -179,39 +172,15 @@ describe("RecoveryService", () => {
     });
   });
 
-  test("backfills provider bars into recovery store and redis", async () => {
+  test("returns disabled results for provider backfill requests", async () => {
     const nowMs = Date.UTC(2026, 2, 25, 12, 0, 0, 0);
     const dateNowSpy = spyOn(Date, "now").mockReturnValue(nowMs);
-    const providerBars: Bar[] = [
-      {
-        symbol: "ESH6",
-        open: 10,
-        high: 12,
-        low: 9,
-        close: 11,
-        volume: 100,
-        trades: 10,
-        startTime: Date.UTC(2026, 2, 25, 11, 58, 0, 0),
-        endTime:
-          Date.UTC(2026, 2, 25, 11, 58, 0, 0) + RECOVERY_BUCKET_MS,
-      },
-    ];
-    const persisted: Bar[][] = [];
-    const redisWrites: Bar[][] = [];
-    const checkpoints: number[] = [];
-    const durableSpy = spyOn(durableBarWriter, "writeDurableBars").mockResolvedValue({
-      source: "provider_rest",
-      bars: 1,
-      durable: "ok",
-    });
     const metricSpy = spyOn(telemetry, "metric").mockImplementation(() => {});
 
     const service = new RecoveryService(
       {
         init: async () => undefined,
-        upsertBars: async (_symbol, _timeframe, bars) => {
-          persisted.push(bars);
-        },
+        upsertBars: async () => undefined,
         getBars: async () => [],
         getLatestTimestamp: async () => null,
         getStats: async () => ({
@@ -223,24 +192,11 @@ describe("RecoveryService", () => {
         }),
       },
       {
-        setRecoveryCheckpoint: async (checkpoint: any) => {
-          checkpoints.push(checkpoint.lastSeenBarTs);
-        },
-        getRecoveryCheckpoint: async () => ({
-          symbol: "ESH6",
-          timeframe: RECOVERY_TIMEFRAME,
-          lastSeenBarTs: Date.UTC(2026, 2, 25, 11, 55, 0, 0),
-          updatedAt: Date.UTC(2026, 2, 25, 11, 55, 30, 0),
-          source: "live" as const,
-        }),
+        setRecoveryCheckpoint: async () => undefined,
+        getRecoveryCheckpoint: async () => null,
         getAllRecoveryCheckpoints: async () => ({}),
-        writeBarsForRecovery: async (bars: Bar[]) => {
-          redisWrites.push(bars);
-        },
+        writeBarsForRecovery: async () => undefined,
       } as any,
-      {
-        fetchBars: async () => providerBars,
-      },
     );
 
     try {
@@ -250,13 +206,9 @@ describe("RecoveryService", () => {
       });
 
       expect(results).toHaveLength(1);
-      expect(results[0]?.providerBars).toBe(1);
-      expect(persisted).toHaveLength(1);
-      expect(durableSpy).toHaveBeenCalledWith(providerBars, "provider_rest");
-      expect(redisWrites).toHaveLength(1);
-      expect(checkpoints.at(-1)).toBe(providerBars[0]?.startTime);
-      expect(metricSpy.mock.calls.some((call) => call[0].name === "mk3.provider_fetch.outcome")).toBe(true);
-      expect(metricSpy.mock.calls.some((call) => call[0].name === "mk3.provider_fetch.bars")).toBe(true);
+      expect(results[0]?.providerBars).toBe(0);
+      expect(results[0]?.error).toContain("Provider REST backfill is disabled");
+      expect(metricSpy.mock.calls.some((call) => call[0].tags?.status === "disabled")).toBe(true);
     } finally {
       dateNowSpy.mockRestore();
       mock.restore();

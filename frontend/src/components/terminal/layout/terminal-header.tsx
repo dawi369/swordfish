@@ -121,7 +121,7 @@ export function TerminalHeader() {
               className="flex items-center will-change-transform"
             >
               <Image
-                src="/mk3LogoTransparent.png"
+                src="/swordfishLogoTransparent.png"
                 alt="Swordfish Logo"
                 width={40}
                 height={40}

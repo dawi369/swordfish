@@ -6,14 +6,14 @@ Accepted
 
 ## Context
 
-MK3 is a monorepo with separate frontend and backend services plus Redis. Railway is the intended host. Railway service roots and healthchecks are configured per service.
+Swordfish is a monorepo with separate frontend and backend services plus Redis. Railway is the intended host. Railway service roots and healthchecks are configured per service.
 
 ## Decision
 
 Deploy the repo as separate Railway services:
 
-- `mk3-frontend` rooted at `/frontend`
-- `mk3-backend` rooted at `/backend`
+- `swordfish-frontend` rooted at `/frontend`
+- `swordfish-backend` rooted at `/backend`
 - Redis as a separate Railway service
 
 Each app service owns its own `railway.toml` and `Dockerfile`.

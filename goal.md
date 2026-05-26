@@ -1,577 +1,566 @@
-# MK3 Dream Data Layer Handoff
+# Swordfish Backend Production Goal
 
-## Current Goal
+## Outcome
 
-Build MK3 into an analytics-first backend for real-time futures data: a reliable
-market-data brain that can later power a ChatGPT-like product with safe custom
-tools, live context, historical context, and auditable operations.
+Build the Swordfish backend into a production-ready market-data runtime for an
+analytics-heavy and AI-heavy product.
 
-The frontend is intentionally out of scope for this phase. The backend/data/API
-layer must become boring, inspectable, durable, and easy to operate before the
-next UI is rebuilt on top of it.
+The backend should:
 
-## Direction
+- run one live Massive WebSocket connection by design
+- write live bars into Redis for hot product UX
+- write live 1-minute bars into Postgres/Timescale-shaped durable storage
+- use `bars_1m` as the canonical durable bar table
+- use Trigger.dev for production recurring schedules
+- expose operator diagnostics that explain provider, Redis, durable-store, job,
+  and freshness state
+- keep future historical backfill behind a flat-file ingestion boundary once
+  Massive futures flat files are available
 
-Use the current stack and make the boundaries correct:
+This file is the canonical current backend contract. When architecture changes,
+update this file first, then code and docs.
 
-- Postgres is the durable analytics store and source of record from the
-  migration point forward.
-- TimescaleDB/TigerData is the likely upgrade path, but the schema must boot on
-  plain Railway Postgres first.
-- Redis remains the hot serving/cache layer for latest bars, RedisTimeSeries
-  chart windows, sessions, snapshots, live fanout, and fast bootstrap.
-- Redis must be rebuildable from durable `bars_1m`; it is not archival truth.
-- Massive WebSocket is the live source.
-- Massive REST is the temporary bounded backfill source.
-- Massive flat files, when available, must write through the same ingestion
-  boundary into the same durable model.
-- AI/tooling should call typed backend service APIs, not raw Redis/Postgres.
+## Hard Constraints
 
-Do not introduce Databricks, ClickHouse, Upstash, Supabase, Neon, or Datadog
-clients as foundational dependencies until the specific need is proven. Less is
-more: reliability, auditability, and simple recovery paths are more important.
+### One Live Provider Owner
 
-## What Has Been Implemented So Far
+Massive allows this account to use one live WebSocket connection. Swordfish
+therefore has one live writer:
 
-### Durable Store Foundation
+- the backend process owns the Massive WebSocket
+- `MassiveWSClient` receives live provider bars
+- `MarketDataWriter` fans out normalized bars
+- Redis, Postgres/Timescale, REST, and browser WebSocket clients are downstream
+  readers/projections
+- Trigger.dev must not create a second live market-data owner
+- frontend clients and future AI tools must never call Massive directly
 
-- `backend/src/server/data/timescale_store.ts`
-  - Boots on plain Postgres when `DATABASE_URL` exists.
-  - Enables Timescale hypertables/continuous aggregates only if the extension is
-    available.
-  - Owns canonical `bars_1m` upserts and reads.
-  - Adds durable schema support for:
-    - `bars_1m`
-    - `operational_runs`
-    - `ingestion_runs`
-    - `provider_fetch_outcomes`
-    - `data_quality_summaries`
-  - Adds `quality_flags` on `bars_1m`.
-  - Exposes durable stats for symbol counts, bar counts, first/last timestamps,
-    gap counts, and spike counts.
+Scaling happens behind this writer boundary, not by adding competing live
+provider connections.
 
-### Write/Read Boundaries
+### No Backfill For Now
 
+There is no production backfill path right now.
+
+Do not use Massive REST provider backfill for futures history. It has produced
+provider access and rate-limit failures before, and it is no longer part of the
+current production architecture.
+
+Historical fill will be added later through Massive futures flat files once
+that access exists. Until then:
+
+- Timescale/Postgres is filled live
+- Redis is filled live
+- missing historical ranges are honest empty or partial states
+- no job should pretend to repair futures history through REST backfill
+- flat-file ingestion code may exist as a future boundary, but it should not be
+  treated as active production coverage
+
+### Production First
+
+There are no users yet, so production is the validation environment. Local
+tests still matter for fast regression checks, but the acceptance gate is
+production evidence on Railway and Trigger.dev.
+
+It is acceptable to throw away existing production bar data and start fresh.
+The important thing now is a clean live-write architecture and current evidence
+that new bars are flowing correctly.
+
+## Runtime Architecture
+
+### Data Flow
+
+```text
+Massive live WebSocket
+  -> MassiveWSClient
+  -> normalized Bar
+  -> MarketDataWriter
+       -> Redis hot projections
+       -> DurableBarWriter
+            -> Postgres/Timescale bars_1m
+       -> backend WebSocket fanout
+  -> REST/admin/tool read services
+       -> Redis for hot/live UX
+       -> bars_1m for durable 1m history and analytics
+```
+
+### Redis Role
+
+Redis is the hot product-serving layer. It is fast, temporary, and rebuildable.
+It is not historical truth.
+
+Redis should store:
+
+- latest bar per active/open ticker
+- temporary 1-second bars for the currently open ticker only
+- one rolling week of 1-minute bars for fast charts and lightweight analytics
+- live session state used by the frontend
+- snapshots and front-month/current-contract cache
+- subscription and coverage projection state
+- job status and short-lived operator state
+
+Redis retention contract:
+
+- 1-second bars are temporary and exist to make the open ticker feel live
+- 1-second bars older than the live window should expire
+- anything one minute or more in the past should be represented as 1-minute
+  bars only
+- 1-minute Redis bars should retain one rolling week
+- Redis may be wiped weekly without data-loss concerns because durable 1-minute
+  history lives in Postgres/Timescale
+
+Open implementation detail to lock in during the Redis hardening slice:
+
+- open-ticker 1-second bars retain for 60 seconds
+- open-ticker switching does not need to delete old 1-second keys immediately;
+  retention handles cleanup
+- Redis 1-minute bars retain for one rolling week
+
+### Postgres/Timescale Role
+
+Postgres is the durable analytics store. Timescale features are useful when
+available, but the schema must boot on plain Postgres too.
+
+Durable bar contract:
+
+- `bars_1m` is the canonical durable bar table
+- live WebSocket writes upsert into `bars_1m` with `source=live_ws`
+- durable writes are idempotent by `(symbol, ts)`
+- old/general `bars` is legacy and should be removed from new write paths
+- analytics, backtesting, AI tools, and admin durability checks read from
+  `bars_1m`
+- production may discard previous bar data and start fresh with new live bars
+
+Durable operational contract:
+
+- operational runs should be durable enough for incident review
+- Trigger/job runs should have durable status where practical
+- provider/durable/Redis failure paths should emit telemetry and Sentry context
+- admin actions that mutate runtime state should be auditable
+
+No stale-contract deletion is required in Timescale/Postgres. We keep durable
+history for analytics and future backtesting. Redis contract/front-month caches
+are temporary and weekly-wipe tolerant.
+
+## Service Boundaries
+
+Primary source paths:
+
+- `backend/src/server/index.ts`
+- `backend/src/server/api/massive/ws_client.ts`
 - `backend/src/services/market_data_writer.ts`
-  - Centralizes live bar fanout to Redis, local recovery, and durable storage.
 - `backend/src/services/durable_bar_writer.ts`
-  - Centralizes durable historical/provider/flat-file-style batch writes through
-    `writeDurableBars`.
-  - Reports partial failures without taking down the live path.
-- `backend/src/services/flat_file_ingestion_service.ts`
-  - Provides the future flat-file entrypoint and routes parsed bars through the
-    same `source=flat_file` durable boundary.
-
-- `backend/src/services/market_data_repository.ts`
-  - Reads Redis first for chart ranges.
-  - Falls back to durable `bars_1m` for empty `tf=1m` Redis ranges.
-  - Returns a source label: `redis`, `timescale`, or `empty`.
-
-- `backend/src/services/recovery_service.ts`
-  - Provider backfills now write to durable `bars_1m`.
-  - Provider fetch outcomes are recorded durably as success, empty, or failed.
-
-### Redis Hot-Cache Rebuild
-
-- `backend/src/services/hot_cache_rebuilder.ts`
-  - Can dry-run latest-week Redis rebuild from durable `bars_1m`.
-  - Can perform the rebuild by writing recovered bars back to Redis.
-
-- Admin APIs expose:
-  - `POST /admin/hot-cache/rebuild?dryRun=true`
-  - `POST /admin/hot-cache/rebuild?dryRun=false`
-  - admin command ids `hot-cache-rebuild-dry-run` and `hot-cache-rebuild`
-
-### Admin Coverage And Diagnostics
-
+- `backend/src/server/data/redis_store.ts`
+- `backend/src/server/data/timescale_store.ts`
 - `backend/src/server/api/rest_client.ts`
-  - `/admin/health` now includes durable stats and coverage classification.
-  - `/admin/ops` is the consolidated operator state.
-  - `/admin/coverage` returns subscribed/latest/durable symbol coverage.
-  - Missing/stale data is classified as:
-    - `ok`
-    - `not_subscribed`
-    - `subscribed_no_live_data`
-    - `provider_no_data`
-    - `stale_contract`
-    - `backfill_pending`
-  - Provider-empty evidence is now required before classifying a symbol as
-    `provider_no_data`; otherwise missing durable/provider evidence remains
-    `backfill_pending`.
-
-### Durable Inspection And Tool-Safe Contracts
-
-- Admin APIs expose typed durable inspection views:
-  - `GET /admin/durable/symbols`
-  - `GET /admin/durable/bars/latest`
-  - `GET /admin/durable/provider-outcomes`
-  - `GET /admin/durable/operational-runs`
-  - `GET /admin/durable/ingestion-runs`
-  - `GET /admin/durable/quality/:symbol`
-
 - `backend/src/services/analytics_tool_service.ts`
-  - Provides safe service-level functions for future LLM/tool adapters.
-  - Covers latest market state, symbol coverage explanations, range bars with
-    quality metadata, provider/backfill status, and dry-run diagnostics.
-  - Keeps future tools away from raw Redis/Postgres access.
-
-- `backend/src/services/data_quality.ts`
-  - Provides focused quality helpers for invalid OHLC, zero/negative volume,
-    missing intervals, and close-to-close jumps.
-  - Used by durable `bars_1m` writes for per-bar `quality_flags`.
-
-### Runtime Hot-Cache Rebuild
-
-- `HUB_REBUILD_HOT_CACHE_ON_STARTUP=false`
-  - Opt-in startup rebuild from durable `bars_1m`.
-  - Default remains conservative until production Postgres is verified.
-  - Startup rebuild runs are recorded as `operational_runs`.
-  - Rebuild failures are recorded and logged but do not block process startup.
-
-### Query-Time Data Quality
-
-- `/bars/range/:symbol` now returns quality metadata:
-  - `gapCount`
-  - `spikeCount`
-  - `invalidOhlcCount`
-  - `zeroVolumeCount`
-  - `negativeVolumeCount`
-  - `oldestBarTs`
-  - `newestBarTs`
-  - `freshness`
-
-- Quality thresholds are configurable:
-  - `DATA_QUALITY_GAP_THRESHOLD_MS=90000`
-  - `DATA_QUALITY_SPIKE_THRESHOLD_PCT=0.25`
-
-- Admin/tool quality reads can persist `data_quality_summaries` rows so gap,
-  spike, and invalid-bar summaries have an audit trail tied to the requested
-  symbol/range/thresholds.
-
-### Auditability And Observability
-
-- `backend/src/utils/operational_runs.ts`
-  - Jobs, recovery paths, and admin actions use durable operational-run records.
-
-- `backend/src/utils/telemetry.ts`
-  - Emits structured metric events as JSON logs in production.
-  - Quiet in tests.
-  - Designed so Datadog can ingest log-derived metrics later without adding an
-    in-process Datadog dependency now.
-  - Provider fetches emit log-derived metrics for success, empty, and failed
-    outcomes plus returned bar counts and run symbol counts.
-
+- `backend/src/server/job_runtime.ts`
+- `backend/src/jobs/*`
+- `backend/src/trigger/scheduled_jobs.ts`
 - `backend/src/utils/sentry.ts`
-  - Sentry supports `SENTRY_ENVIRONMENT` and `SENTRY_RELEASE`.
-  - Sentry remains the exception/degraded-condition tool.
-  - High-value events now include context tags such as `run_id`, `job_name`,
-    `symbol`, `ingestion_source`, and provider/recovery source when available.
+- `backend/src/utils/telemetry.ts`
 
-### Documentation Updated
+Boundary rules:
 
-- `docs/backend/data-layer.md`
-- `docs/backend/api.md`
-- `docs/backend/operations.md`
-- `docs/roadmap/data-layer-migration-plan.md`
-- `docs/decisions/ADR-0002-redis-as-hot-source-of-truth.md`
-- `docs/runbooks/railway-deploy.md`
-- `docs/specs/backend-data-layer-v1.md`
-- `docs/specs/observability-metrics.md`
-- `backend/README.md`
-- `backend/.env.example`
+- transport code receives provider events; it does not own persistence policy
+- `MarketDataWriter` owns live fanout across Redis, durable storage, and
+  failure reporting
+- `DurableBarWriter` owns durable bar batches for live and future flat-file
+  ingestion
+- `MarketDataRepository`/tool services own read fallback and response metadata
+- route handlers call service contracts; they should not grow raw Redis or SQL
+  behavior
+- Trigger tasks call backend admin endpoints; they own production schedules but
+  do not import backend runtime singletons, duplicate business logic, or
+  instantiate live WebSocket ownership
 
-## Current Verification State
+## Trigger.dev Production Contract
 
-The current backend work passes:
+Production recurring schedules should be owned by Trigger.dev once validated.
+
+Current Trigger project setup page says:
+
+```bash
+npx trigger.dev@latest init -p proj_zxdiyvcgdmoxjfnbyzzh
+pnpm dlx trigger.dev@latest dev
+```
+
+Repo-local preferred command for dev validation:
+
+```bash
+cd backend
+pnpm dlx trigger.dev@latest dev
+```
+
+Production schedule contract:
+
+- Trigger.dev owns recurring production schedules
+- backend local cron duplication should be disabled in production with
+  `HUB_ENABLE_SCHEDULED_JOBS=false` once Trigger schedules are live
+- startup hydration remains separate from recurring schedules
+- production Trigger tasks are backend-bound admin callbacks because the
+  Railway backend owns Redis, provider clients, durable stores, and the running
+  live client
+- Trigger tasks must not open a live Massive WebSocket
+
+Required Trigger validation:
+
+- authenticate the Trigger CLI
+- initialize or bind the backend to project `proj_zxdiyvcgdmoxjfnbyzzh`
+- verify Trigger dev can load the task files
+- deploy production Trigger tasks
+- verify schedules in the Trigger dashboard
+- manually run at least one production task and confirm telemetry/Sentry/job
+  status output
+
+## Workstreams
+
+### P0. Rewrite Docs Around The Current Contract
+
+Goal: remove stale architecture assumptions and make the live-only data path
+obvious.
+
+Tasks:
+
+- update backend docs to say no REST backfill is active
+- add a dedicated Redis/Timescale structure document
+- document the flow of a bar from Massive WebSocket to Redis and `bars_1m`
+- document Redis 1-second temporary open-ticker bars
+- document Redis one-week 1-minute hot cache
+- document `bars_1m` as canonical durable truth
+- mark old/general `bars` as legacy and remove it from the intended path
+
+Acceptance:
+
+- a new markdown document details Redis keys, durable tables, and bar flow
+- no current doc describes provider REST backfill as the production repair path
+- `goal.md` and backend docs agree
+
+### P0. Remove Active Backfill Behavior
+
+Goal: make it impossible for production runtime to silently use provider REST
+backfill as the current history repair mechanism.
+
+Tasks:
+
+- inspect startup, reconnect, recovery, admin, and job paths for backfill calls
+- disable or remove automatic provider REST backfill behavior
+- keep future flat-file ingestion boundaries clearly inactive until files exist
+- update coverage statuses so missing history is honest and not framed as
+  pending REST backfill
+- adjust tests around recovery/backfill wording and behavior
+
+Acceptance:
+
+- production boot does not start provider REST history repair
+- reconnect behavior does not call REST backfill for futures history
+- admin surfaces do not advertise REST backfill as the current solution
+- tests cover the disabled/no-backfill contract
+
+### P0. Make Redis Retention Match Product UX
+
+Goal: Redis gives the frontend a lively open-ticker experience without becoming
+durable history.
+
+Tasks:
+
+- add or tighten Redis key families for open-ticker 1-second bars
+- retain temporary 1-second bars only for the open ticker/live window
+- retain one rolling week of 1-minute Redis bars
+- ensure older chart/history reads use 1-minute bars, not stale 1-second data
+- document and test retention/index cleanup
+
+Acceptance:
+
+- open ticker can receive live second updates
+- one-minute-or-older data is represented by 1-minute bars only
+- Redis can be wiped weekly without losing durable analytics data
+- `bun run test:redis` covers the retention contract with reachable Redis
+
+### P0. Make `bars_1m` The Only Durable Bar Path
+
+Goal: new durable market data writes go only to `bars_1m`.
+
+Tasks:
+
+- inspect all references to legacy `bars`
+- remove legacy `bars` creation/write/read paths if no longer needed
+- if a production migration is needed, prefer a fresh-start migration over
+  preserving old bar data
+- verify live WebSocket writes upsert `source=live_ws` rows into `bars_1m`
+- keep Timescale extension features optional
+
+Acceptance:
+
+- no active runtime writer targets legacy `bars`
+- production durable verification shows current `bars_1m` rows with
+  `source=live_ws`
+- analytics/backtesting read path points at `bars_1m`
+- `bun run test:timescale` passes against reachable Postgres/Timescale
+
+### P0. Finish Trigger.dev And Railway Production Validation
+
+Goal: prove the scheduled-job and data-layer runtime in production, not just
+locally.
+
+Tasks:
+
+- authenticate Trigger CLI
+- run Trigger dev against the backend task directory
+- deploy Trigger tasks to the configured project
+- verify dashboard schedules
+- configure Trigger production env with `BACKEND_BASE_URL` and `HUB_API_KEY`
+- set production backend cron duplication correctly
+- verify Railway production env points at the intended Redis and Postgres
+- verify `/health`, `/admin/health`, `/admin/ops`, and durable inspection
+  endpoints in production
+- verify current live `bars_1m` rows are being written from WebSocket data
+
+Acceptance:
+
+- Trigger deployment shows the expected production schedules/tasks
+- Trigger manual run evidence is captured
+- Railway backend reports Redis and durable Postgres connected
+- production evidence shows live `source=live_ws` rows in `bars_1m`
+- no active runtime path relies on local-only state
+
+### P1. Security, Audit, And Observability Pass
+
+Goal: operator surfaces are useful without being careless.
+
+Tasks:
+
+- final admin route security review
+- verify admin endpoints have the intended auth/rate-limit posture
+- add Sentry breadcrumbs/tags for provider recovery, Redis write failures,
+  durable write failures, and job failures
+- add telemetry coverage for live write counts, durable write failures, Redis
+  partial failures, stale data, Trigger job starts/finishes, and admin commands
+- make production failure modes visible in health/admin responses
+
+Acceptance:
+
+- admin mutation routes are protected or deliberately documented
+- Sentry events include useful context such as `run_id`, `job_name`, `symbol`,
+  `provider`, and `ingestion_source`
+- logs/metrics can explain why a symbol is missing, stale, or partial
+
+### P1. Analytics And AI Read Contracts
+
+Goal: future frontend analytics and AI tools use typed backend services, not raw
+infrastructure coupling.
+
+Tasks:
+
+- keep `AnalyticsToolService` as the tool-safe read boundary
+- make range responses include source, freshness, and quality metadata
+- preserve explicit empty/partial states
+- avoid making frontend clients choose between Redis and Postgres directly
+
+Acceptance:
+
+- tool-safe reads can explain coverage and freshness
+- chart and analytics APIs do not expose infrastructure internals as product
+  decisions
+
+### P2. Future Flat-File Historical Ingestion
+
+Goal: prepare the right boundary for historical data without pretending it is
+available today.
+
+Tasks:
+
+- keep or create a flat-file ingestion service boundary
+- wait for Massive futures flat-file access
+- define parser contracts once real files are available
+- write parsed 1-minute bars through `DurableBarWriter`
+- record ingestion runs and quality summaries
+
+Acceptance:
+
+- no production code claims flat-file history is available before access exists
+- once files exist, historical ingestion writes into `bars_1m` through the same
+  durable path as live bars
+
+## Verification Commands
+
+Fast local regression checks:
 
 ```bash
 cd backend
 bunx tsc --noEmit --skipLibCheck
 bun run test:smoke
-bun run test
-bun run test:unit
 ```
 
-The production data-layer acceptance gates have a verifier script:
+Redis-backed check:
 
 ```bash
 cd backend
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
-HUB_API_KEY=... \
-bun run verify:production-data-layer
+bun run test:redis
 ```
 
-The verifier requires the latest durable `source=live_ws` row to be recent by
-default, using `PRODUCTION_DATA_LAYER_MAX_LIVE_BAR_AGE_MS` only for deliberate
-one-off activation checks during known market pauses.
-
-Last known smoke result:
-
-- 88 pass
-- 9 skip
-- 0 fail
-
-The skipped tests are environment-dependent Redis, Postgres/Timescale, and live
-provider tests. Redis integration tests run with `bun run test:redis`, which
-sets `RUN_REDIS_TESTS=1` and requires a reachable Redis instance. Postgres/
-Timescale tests run with `bun run test:timescale`, which sets
-`RUN_TIMESCALE_TESTS=1` and requires a reachable database.
-
-## Important Current Caveat
-
-Railway Postgres has not been provisioned or wired yet in this session. That is
-an external infrastructure mutation and should be done intentionally.
-
-Railway also had a public major service disruption on May 20, 2026 affecting
-login, dashboard/API/control-plane, deploy, and workload recovery paths. The
-official Railway status page said services were recovering, but some workloads
-could still need redeploys and non-enterprise deploys were previously paused.
-Treat Railway login/API failures during this window as external infrastructure
-until the status page and CLI agree that auth/project inspection are healthy.
-
-Current Railway CLI inspection is blocked locally by auth. After upgrading the
-Homebrew Railway CLI from `4.58.0` to `4.59.0`, stale refresh-token failures
-still prevent normal inspection:
-
-```bash
-railway status
-# Warning: failed to refresh OAuth token: Token refresh failed: unknown: HTTP 404 Not Found. Please run `railway login` again.
-# Failed to fetch: error decoding response body
-
-railway whoami
-# Warning: failed to refresh OAuth token: Token refresh failed: unknown: HTTP 404 Not Found. Please run `railway login` again.
-# Failed to fetch: error decoding response body
-
-railway whoami
-# After CLI upgrade and aborted browser pairing: invalid_grant followed by
-# Unauthorized. Please run `railway login` again.
-```
-
-No token-based Railway auth is currently present in this shell:
-
-```bash
-printenv | rg '^(RAILWAY_TOKEN|RAILWAY_API_TOKEN)='
-# no output
-```
-
-Non-interactive login is also blocked in this Codex shell unless token auth is
-provided:
-
-```bash
-railway login
-# Cannot login in non-interactive mode. For non-interactive environments, set RAILWAY_API_TOKEN or RAILWAY_TOKEN.
-
-railway login --browserless
-# Browserless login requires an interactive terminal. For non-interactive environments, set RAILWAY_API_TOKEN or RAILWAY_TOKEN.
-
-railway login --browserless
-# Before CLI upgrade: Device authorization request failed (HTTP 404 Not Found): /oauth/device/auth
-
-railway upgrade --check
-# Install method: Homebrew
-# Binary path: /opt/homebrew/bin/railway
-# Upgrade command: brew upgrade railway
-
-brew upgrade railway
-# Upgraded railway 4.58.0 -> 4.59.0
-
-railway login --browserless
-# Emits an activation code and waits at https://railway.com/activate.
-# The latest Codex attempt was stopped after the browser pairing was not completed.
-```
-
-Next authenticated-shell options:
-
-```bash
-# Interactive terminal:
-railway login
-railway status
-
-# Browser pairing from Codex/TTY:
-railway login --browserless
-# Open https://railway.com/activate and enter the emitted code before it expires.
-
-# Non-interactive terminal:
-export RAILWAY_TOKEN=...
-railway whoami
-railway status
-```
-
-Do not store Railway tokens in repo files, `.env` examples, docs, shell history
-snippets, or shared logs.
-
-The code is ready for:
-
-- creating a Railway Postgres service
-- setting `DATABASE_URL` on `mk3-backend`
-- ensuring neither `ENABLE_TIMESCALE=false` nor `DISABLE_DURABLE_STORE=true` is set
-- restarting the backend
-- verifying `/health`, `/admin/health`, `/admin/coverage`, and durable writes
-- verifying durable provider outcomes and ingestion-run audit rows
-- running `bun run verify:production-data-layer`
-
-Local durable verification fallback while Railway is unavailable:
-
-```bash
-docker compose --profile durable up -d timescaledb
-cd backend
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
-  bun run test:timescale
-```
-
-Current local machine caveat: Docker CLI is present, and
-`docker compose --profile durable config` validates the opt-in Timescale service,
-but Docker/OrbStack is not running:
-
-```bash
-docker compose --profile durable up -d timescaledb
-# Cannot connect to the Docker daemon at unix:///Users/dawi/.orbstack/run/docker.sock.
-```
-
-## Completion Audit - 2026-05-20
-
-Objective: implement the backend/data/API foundation for an analytics-first,
-LLM-tool-ready market-data layer.
-
-Audit result: local implementation is substantially complete and verified, but
-the overall goal is not complete until production Railway Postgres is provisioned
-and the production verifier passes.
-
-| Requirement | Evidence | Status |
-|---|---|---|
-| Plain Postgres durable schema with optional Timescale features | `backend/src/server/data/timescale_store.ts`; covered by smoke plus skipped DB integration tests requiring `RUN_TIMESCALE_TESTS=1` and a reachable DB | Locally verified, production unverified |
-| Redis remains hot serving and is rebuildable from durable `bars_1m` | `market_data_repository.ts`, `hot_cache_rebuilder.ts`, `/admin/hot-cache/rebuild`, startup option `HUB_REBUILD_HOT_CACHE_ON_STARTUP=false`; durable range/quality failures degrade without breaking Redis ranges | Locally verified |
-| Live writes fan out to Redis, recovery, and durable store | `market_data_writer.ts`, `market_data_writer.test.ts` | Locally verified |
-| Provider/flat-file-style durable batch writes use one boundary | `durable_bar_writer.ts`, `flat_file_ingestion_service.ts`, `recovery_service.ts`, `durable_bar_writer.test.ts`, `flat_file_ingestion_service.test.ts`; ingestion runs are recorded as started/success/failed | Locally verified |
-| Durable admin inspection endpoints | `/admin/durable/symbols`, `/admin/durable/bars/latest`, `/admin/durable/provider-outcomes`, `/admin/durable/operational-runs`, `/admin/durable/ingestion-runs`, `/admin/durable/quality/:symbol`; `rest_client.test.ts` | Locally verified |
-| Deterministic coverage semantics | `rest_client.test.ts` covers `ok`, `not_subscribed`, `subscribed_no_live_data`, `provider_no_data`, `stale_contract`, `backfill_pending` | Locally verified |
-| Query-time quality metadata and durable summaries | `data_quality.ts`, `market_data_repository.ts`, `timescale_store.ts`, `data_quality.test.ts`, `rest_client.test.ts`, `analytics_tool_service.test.ts` | Locally verified |
-| Tool-safe service contracts for future LLM tools | `analytics_tool_service.ts`, `analytics_tool_service.test.ts`; tool range reads stay usable if durable quality-summary audit recording fails | Locally verified |
-| Sentry/log-derived telemetry context | `sentry.ts`, `sentry.test.ts`, `telemetry.ts`, recovery/job/admin write paths, `docs/specs/observability-metrics.md` | Locally verified by type/test coverage and docs |
-| Production Railway durable-store activation | Requires Railway auth, Postgres service, `DATABASE_URL`, backend restart, Redis hot serving connected, Massive websocket connected, recent live `source=live_ws` durable rows, useful provider outcomes, successful ingestion runs, and verifier pass; verifier contract covered by `production_data_layer_verifier.test.ts` | Blocked |
-
-Latest local verification:
+Postgres/Timescale-backed check:
 
 ```bash
 cd backend
-bunx tsc --noEmit --skipLibCheck
-bun run test:smoke
-# 88 pass, 9 skip, 0 fail, 273 expect() calls, 97 tests across 17 files
-bun run test:unit
-# 91 pass, 24 skip, 0 fail, 278 expect() calls, 115 tests across 21 files
-bun run test
-# 134 pass, 36 skip, 0 fail, 607 expect() calls, 170 tests across 36 files
+bun run test:timescale
 ```
 
-Production completion gate:
+Trigger local dev check:
 
 ```bash
 cd backend
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
-HUB_API_KEY=... \
-bun run verify:production-data-layer
+pnpm dlx trigger.dev@latest dev
 ```
 
-## Remaining Implementation Slice
+Production checks:
 
-### 1. Provision And Verify Railway Postgres
+- Trigger.dev dashboard schedules and latest runs
+- Railway backend logs around startup and jobs
+- production `/health`
+- production `/admin/health`
+- production `/admin/ops`
+- production durable inspection for recent `bars_1m source=live_ws`
 
-Goal: turn the durable path on in production.
+Do not use local-only green tests as final proof for this goal. They are
+regression checks. Production evidence is the gate.
 
-Tasks:
+## Current Status
 
-- Add Railway Postgres to the Swordfish production environment.
-- Set `DATABASE_URL` for `mk3-backend`.
-- Do not set `ENABLE_TIMESCALE=false` or `DISABLE_DURABLE_STORE=true`.
-- Redeploy/restart `mk3-backend`.
-- Confirm `/health` reports durable storage connected.
-- Confirm live bars are being inserted into `bars_1m`.
-- Run an admin recovery backfill and confirm provider outcomes are recorded.
+Done or partially done:
 
-Acceptance:
+- goal state in the Codex tool may still show `blocked` from the earlier
+  Trigger-auth blocker; the live project status is no longer blocked and the
+  real remaining acceptance item is first automatic Trigger schedule evidence
+- Trigger.dev integration files and tests exist
+- scheduled jobs are wrapped instead of rewritten
+- a test guards against Trigger tasks opening a live Massive WebSocket
+- job observability helper exists for telemetry/Sentry breadcrumbs
+- local Redis and Timescale-backed tests have passed with OrbStack services
+- provider-disabled boot mode exists for health/admin smoke checks
+- backend docs now describe the live-only no-backfill contract
+- `docs/backend/redis-timescale-bar-flow.md` documents Redis, `bars_1m`, and
+  the flow of a live bar
+- automatic startup/reconnect provider REST backfill is disabled
+- `/admin/recovery/backfill` is authenticated but returns `410 disabled`
+- the active Timescale schema no longer creates or writes legacy `bars`
+- production data-layer verifier checks that provider REST backfill is disabled
+- Redis now writes temporary 1-second bars only for `meta:open_ticker`
+- Redis writes direct 1-minute bars for every live symbol with one-week
+  retention
+- `/bars/open-ticker` exposes the current open-ticker hint for the frontend
+- open-ticker mutations require an allowed browser origin
+- Railway production backend deployed the no-backfill, `bars_1m`, and Redis
+  open-ticker hardening slice in deployment
+  `c13e90a6-d86a-4cc8-888d-f471cc9bce14`
+- an earlier Railway deploy attempt,
+  `3503827d-729e-472a-a82b-3172d9ffc28e`, failed because `--path-as-root`
+  conflicted with the service root-directory config; deploy backend from the
+  repo root with `railway up --service mk3-backend --environment production`
+- production `/health` reports Redis, Postgres/Timescale, and Massive WS
+  connected on `https://mk3-backend-production.up.railway.app`
+- production verifier passed against Railway with live durable
+  `bars_1m source=live_ws` rows, disabled backfill, and hot-cache rebuild
+  dry-run checks
+- production `/admin/recovery/backfill` returns `410 disabled`
+- production `/bars/open-ticker` origin protection was verified and reset to
+  `null`
+- direct admin mutation routes now record durable `admin_action` operational
+  runs, emit `swordfish.admin_action.*` metrics, and attach Sentry context on
+  failure
+- `/bars/open-ticker` `DELETE` is included in CORS method headers and covered by
+  the REST route test
+- Railway production backend deployed the admin-action audit and open-ticker
+  CORS hardening slice in deployment
+  `8e8c5e66-1046-42ba-95cb-feab18569fc8`
+- production CORS preflight for `/bars/open-ticker` now advertises
+  `GET, POST, DELETE, OPTIONS` for `https://swordfsh.app`
+- production durable operational runs show an `admin_action` success record for
+  `recovery-backfill-disabled` after the latest deploy
+- production data-layer verifier passed again after the latest deploy with live
+  `bars_1m source=live_ws` rows, disabled backfill, and hot-cache rebuild
+  dry-run checks
+- admin browser-origin checks now use `HUB_ADMIN_ALLOWED_ORIGINS`
+  independently from public `HUB_ALLOWED_ORIGINS`, with tests covering allowed
+  local admin origin and rejected unknown origins
+- Railway production backend deployed the admin origin policy hardening in
+  deployment `975601bc-db24-44a6-b09e-673e2629ddd7`
+- production rejected a disallowed browser-origin admin request with `403`
+  after the admin origin hardening deploy
+- production data-layer verifier passed again after the admin origin hardening
+  deploy with live `bars_1m source=live_ws` rows, disabled backfill, and
+  hot-cache rebuild dry-run checks
+- Redis client errors now emit `swordfish.redis.client_error` telemetry and
+  throttled Sentry context
+- contract-provider success, empty, HTTP failure, and network failure paths now
+  emit `swordfish.provider_contract_fetch.*` telemetry with Sentry context for
+  provider failures
+- Railway production backend deployed the provider/Redis observability hardening
+  in deployment `45e9522d-f3cd-4ada-b4e2-4dfc24edb8bc`
+- production data-layer verifier passed again after the provider/Redis
+  observability deploy with live `bars_1m source=live_ws` rows, disabled
+  backfill, and hot-cache rebuild dry-run checks
+- Trigger.dev CLI auth now works for project `proj_zxdiyvcgdmoxjfnbyzzh`
+- Trigger.dev local dev loaded the backend task files successfully with worker
+  version `20260526.1`
+- Trigger.dev production deploy succeeded for version `20260526.2`,
+  deployment `fr5d5041`, with four detected tasks
+- the previous Trigger.dev production deploy attempt failed as deployment
+  `55oqe4hn` because task import required backend runtime env such as
+  `REDIS_HOST`; tasks now call backend admin endpoints instead of importing
+  backend runtime singletons
+- Trigger.dev production env currently has default Trigger/OpenTelemetry
+  variables only; it is missing `BACKEND_BASE_URL` and `HUB_API_KEY`
+- a production manual run was created for `snapshot-refresh`:
+  `run_cmpmlry8o42xs0hoo6r54po3b`; it failed with
+  `BACKEND_BASE_URL is required for backend-bound Trigger.dev tasks`, proving
+  the next blocker is Trigger production env configuration rather than deploy
+  auth or task import
+- Railway production backend deployed the Trigger backend-callback compatibility
+  slice in deployment `6332b3d3-d9d8-4d84-aa26-465452bb000f`
+- production data-layer verifier passed again after the Trigger
+  backend-callback deploy with live `bars_1m source=live_ws` rows, disabled
+  backfill, and hot-cache rebuild dry-run checks
+- `trigger.config.ts` now syncs only `BACKEND_BASE_URL` and `HUB_API_KEY` to
+  Trigger.dev with the official `syncEnvVars` extension during authenticated
+  deploys
+- Trigger.dev production env now contains `BACKEND_BASE_URL` and `HUB_API_KEY`
+  with values hidden by the CLI
+- Trigger.dev production deploy `ia65pbxu`, version `20260526.4`, is current,
+  deployed, and reports four tasks
+- Trigger.dev dashboard schedules were verified in production:
+  `daily-clear` at `0 2 * * *`, `snapshot-refresh` at `5 2 * * *`,
+  `front-month-refresh` at `0 3 * * *`, and `subscription-refresh` at
+  `5 0 1 * *`, all in `America/New_York`
+- production manual Trigger run `run_cmpmmchiw4mra0hmze7iphf5d` for
+  `snapshot-refresh` completed successfully and returned backend job status
+  with `lastSuccess=true` and `symbolsUpdated=171`
+- Railway production has `HUB_ENABLE_SCHEDULED_JOBS=false`, so recurring
+  backend-local cron duplication is disabled while Trigger.dev owns schedules
+- production data-layer verifier passed again at `2026-05-26T12:49Z` after
+  the Trigger/env work, with Redis connected, Timescale/Postgres connected,
+  Massive WS connected, live `bars_1m source=live_ws` rows, disabled provider
+  REST backfill, and hot-cache rebuild dry-run checks
 
-- `bars_1m` receives live `live_ws` rows.
-- `provider_fetch_outcomes` receives manual backfill outcomes.
-- `ingestion_runs` records manual backfill ingestion attempts.
-- `/admin/coverage` shows durable symbol counts.
-- Redis serving continues during durable-store issues.
+Still required:
 
-## Locally Completed Slices
+- monitor the first automatic Trigger scheduled run after the next 2:00 AM ET
+  window on `2026-05-27` and confirm it matches the manual-run evidence
 
-These were originally implementation slices, but they are now covered by the
-local code, docs, and tests listed in the completion audit above. Do not redo
-these unless the production verifier exposes a real gap.
+## Definition Of Done
 
-### 2. Add Durable Query/Inspection Endpoints
+This backend goal is done when:
 
-Goal: make durable data inspectable without exposing raw SQL.
-
-Add admin endpoints for:
-
-- recent durable symbols
-- latest durable bar per symbol
-- provider fetch outcomes by symbol
-- operational runs by type/status
-- ingestion runs by source/status
-- data quality summary for a symbol and time range
-
-Keep responses typed, paginated/limited, and safe for future AI tools.
-
-Acceptance:
-
-- Admin can answer: what symbols are durable, which are stale, which provider
-  calls returned empty, which jobs/backfills failed, and when.
-- Tests cover auth, response shape, empty states, and error states.
-
-### 3. Tighten Coverage Semantics
-
-Goal: make missing ticker diagnosis precise.
-
-Improve classification with provider outcomes:
-
-- `provider_no_data` only when a recent provider fetch returned empty.
-- `backfill_pending` when no durable/provider evidence exists yet.
-- `stale_contract` when latest Redis bar is old and symbol is not in current
-  subscription or current active contracts.
-- `subscribed_no_live_data` when subscribed but no live bar has arrived within
-  an expected market/session window.
-
-Acceptance:
-
-- Coverage status is deterministic and documented.
-- Tests cover each coverage class.
-- `/admin/coverage` gives actionable next steps.
-
-### 4. Make Redis Rebuild A Runtime Startup Option
-
-Goal: Redis can recover from durable state after restart or Redis loss.
-
-Tasks:
-
-- Add a startup option such as `HUB_REBUILD_HOT_CACHE_ON_STARTUP=true`.
-- Keep the default conservative until production DB is verified.
-- Record rebuild runs as `operational_runs`.
-- Emit metrics for hydrated symbols, skipped symbols, and bars loaded.
-
-Acceptance:
-
-- Dry-run and real rebuild are tested.
-- A backend restart can rebuild latest-week Redis state from durable `bars_1m`.
-- Rebuild failures degrade operator status but do not block health forever.
-
-### 5. Harden Data Quality
-
-Goal: trust charts and future AI tools.
-
-Tasks:
-
-- Make spike/gap detection configurable.
-- Track gap/spike summaries durably enough for audit.
-- Add query-time metadata to range responses:
-  - `source`
-  - `gapCount`
-  - `spikeCount`
-  - `oldestBarTs`
-  - `newestBarTs`
-  - `freshness`
-- Avoid false confidence when a symbol is illiquid or out of session.
-
-Acceptance:
-
-- Weird chart spikes can be traced to raw durable bars, provider source, and
-  ingestion run.
-- Tests cover obvious invalid OHLC, large close-to-close jumps, and missing
-  intervals.
-
-### 6. Add Tool-Safe Service Contracts
-
-Goal: prepare for the future ChatGPT-like futures assistant.
-
-Do not build the AI layer yet. First define backend services that are safe to
-expose as tools later:
-
-- get latest market state
-- get symbol coverage
-- get range bars with quality metadata
-- get provider/backfill status
-- run safe dry-run diagnostics
-- explain why a symbol is missing/stale
-
-Acceptance:
-
-- Tool candidates are service-level functions with typed inputs/outputs.
-- No tool needs direct Redis/Postgres access.
-- Admin-only mutations stay protected and auditable.
-
-### 7. Sentry And Datadog Follow-Through
-
-Goal: production incidents are explainable.
-
-Sentry:
-
-- Ensure production sets `SENTRY_DSN`, `SENTRY_ENVIRONMENT=production`, and
-  `SENTRY_RELEASE`.
-- Add Sentry context/tags for ingestion source, run id, symbol, and job name on
-  high-value exceptions.
-
-Datadog:
-
-- Start by ingesting structured `metric` logs.
-- Create dashboards/monitors for:
-  - durable store connected
-  - market data partial write failures
-  - stale symbol count
-  - spike symbol count
-  - provider empty/failed outcome rate
-  - admin repair command usage
-  - operational run failures
-- Only add a Datadog client if log-derived metrics are insufficient.
-
-Acceptance:
-
-- A production failure can be traced from Sentry event to operational run to
-  provider outcome to affected symbols.
-
-## Commands For The Next Codex Instance
-
-Start here:
-
-```bash
-cd /Users/dawi/dev/mk3
-git status --short
-cd backend
-bunx tsc --noEmit --skipLibCheck
-bun run test:smoke
-```
-
-If Railway remains unauthenticated, restore auth first:
-
-```bash
-railway login
-# or, in non-interactive shells:
-export RAILWAY_TOKEN=...
-railway whoami
-railway status
-```
-
-Useful runtime checks once Railway Postgres is configured:
-
-```bash
-curl https://mk3-backend-production.up.railway.app/health | jq
-railway run --service mk3-backend --environment production -- sh -c 'curl -s -H "X-API-Key: $HUB_API_KEY" https://mk3-backend-production.up.railway.app/admin/health' | jq
-railway run --service mk3-backend --environment production -- sh -c 'curl -s -H "X-API-Key: $HUB_API_KEY" https://mk3-backend-production.up.railway.app/admin/coverage' | jq
-railway run --service mk3-backend --environment production -- sh -c 'curl -s -X POST -H "X-API-Key: $HUB_API_KEY" "https://mk3-backend-production.up.railway.app/admin/hot-cache/rebuild?dryRun=true"' | jq
-BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app HUB_API_KEY=... bun run verify:production-data-layer
-```
-
-## Non-Negotiables
-
-- Preserve Redis as hot serving until durable rebuild/read paths are proven.
-- Do not claim historical completeness before backfill or flat files populate
-  the requested range.
-- Do not add a warehouse platform before the Postgres/Timescale foundation is
-  operationally solid.
-- Keep admin mutations API-key protected and durably audited.
-- Keep tests close to behavior: write path, fallback path, coverage classes,
-  recovery/backfill, admin auth, and operator diagnostics.
-- Favor fewer moving parts over impressive infrastructure.
+- live Massive data flows through one backend-owned WebSocket
+- Redis serves hot latest/open-ticker/one-week 1-minute UX state
+- temporary 1-second Redis data is limited to the open ticker/live window
+- durable 1-minute bars are written to `bars_1m` with `source=live_ws`
+- legacy `bars` is no longer part of the active durable write path
+- no production runtime path relies on REST provider backfill
+- Trigger.dev owns production recurring schedules
+- Railway production health/admin endpoints prove Redis and durable storage are
+  connected
+- production evidence proves current live bars are being written durably
+- admin routes have a reviewed security/audit posture
+- Sentry and telemetry can explain provider, Redis, durable, and job failures
+- docs describe the actual Redis/Timescale structure and the flow of a bar

@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-FRONTEND_SERVICE_NAME="${FRONTEND_SERVICE_NAME:-mk3-frontend}"
-BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-mk3-backend}"
+FRONTEND_SERVICE_NAME="${FRONTEND_SERVICE_NAME:-swordfish-frontend}"
+BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-swordfish-backend}"
 
 if ! command -v railway >/dev/null 2>&1; then
   echo "Railway CLI is required."

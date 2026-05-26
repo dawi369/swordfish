@@ -134,7 +134,7 @@ export async function initializeJobRuntime(
         },
       });
       telemetry.metric({
-        name: "mk3.hot_cache_rebuild.startup",
+        name: "swordfish.hot_cache_rebuild.startup",
         type: "counter",
         value: 1,
         tags: {
@@ -142,7 +142,7 @@ export async function initializeJobRuntime(
         },
       });
       telemetry.metric({
-        name: "mk3.hot_cache_rebuild.bars_loaded",
+        name: "swordfish.hot_cache_rebuild.bars_loaded",
         type: "gauge",
         value: result.barsLoaded,
         tags: {
@@ -156,7 +156,7 @@ export async function initializeJobRuntime(
         error: message,
       });
       telemetry.metric({
-        name: "mk3.hot_cache_rebuild.startup",
+        name: "swordfish.hot_cache_rebuild.startup",
         type: "counter",
         value: 1,
         tags: {

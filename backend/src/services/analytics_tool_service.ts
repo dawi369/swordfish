@@ -98,7 +98,7 @@ function reasonForStatus(status: ToolCoverageStatus): {
       };
     case "provider_no_data":
       return {
-        reason: "The latest provider backfill for this symbol returned empty.",
+        reason: "Legacy provider diagnostics for this symbol returned empty.",
         nextAction: "Verify the contract symbol and provider availability window.",
       };
     case "stale_contract":
@@ -108,8 +108,9 @@ function reasonForStatus(status: ToolCoverageStatus): {
       };
     case "backfill_pending":
       return {
-        reason: "No durable bars or provider-empty evidence exists yet.",
-        nextAction: "Run a dry-run diagnostic or provider backfill before claiming no data.",
+        reason: "No durable live bars or historical evidence exists yet.",
+        nextAction:
+          "Wait for live ingestion or future flat-file history before claiming no data.",
       };
   }
 }
@@ -253,7 +254,7 @@ export class AnalyticsToolService {
       };
     } catch (error) {
       telemetry.metric({
-        name: "mk3.tool.range_quality_record_failure",
+        name: "swordfish.tool.range_quality_record_failure",
         type: "counter",
         value: 1,
         tags: {

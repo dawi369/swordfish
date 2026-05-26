@@ -9,7 +9,9 @@ import {
   finishOperationalRun,
   startOperationalRun,
 } from "@/utils/operational_runs.js";
+import { recordJobFinished, recordJobStarted } from "@/utils/job_observability.js";
 const REDIS_STATUS_KEY = "job:snapshot:status";
+const JOB_NAME = "snapshot-refresh";
 
 interface SnapshotJobStatus {
   lastRunTime: number | null;
@@ -66,9 +68,10 @@ export class SnapshotJob {
     this.status.lastRunTime = Date.now();
     const run = await startOperationalRun({
       runType: "job",
-      name: "snapshot-refresh",
+      name: JOB_NAME,
       trigger,
     });
+    recordJobStarted({ jobName: JOB_NAME, trigger, runId: run.runId });
 
     try {
       const [subscribedSymbols, cachedContractSymbols] = await Promise.all([
@@ -85,9 +88,18 @@ export class SnapshotJob {
         this.status.lastSuccess = true;
         this.status.symbolsUpdated = 0;
         await this.saveStatus();
+        const counts = { symbols: 0, symbolsUpdated: 0 };
         await finishOperationalRun(run, "skipped", {
-          counts: { symbols: 0, symbolsUpdated: 0 },
+          counts,
           metadata: { reason: "no_active_symbols" },
+        });
+        recordJobFinished({
+          jobName: JOB_NAME,
+          trigger,
+          runId: run.runId,
+          status: "skipped",
+          startedAt: run.startedAt,
+          counts,
         });
         return;
       }
@@ -114,14 +126,24 @@ export class SnapshotJob {
       this.status.lastSuccess = true;
       this.status.lastError = null;
       this.status.symbolsUpdated = updated;
+      const status = updated === symbols.length ? "success" : "partial_success";
+      const counts = {
+        symbols: symbols.length,
+        symbolsUpdated: updated,
+        symbolsMissing: symbols.length - updated,
+      };
 
       await this.saveStatus();
-      await finishOperationalRun(run, updated === symbols.length ? "success" : "partial_success", {
-        counts: {
-          symbols: symbols.length,
-          symbolsUpdated: updated,
-          symbolsMissing: symbols.length - updated,
-        },
+      await finishOperationalRun(run, status, {
+        counts,
+      });
+      recordJobFinished({
+        jobName: JOB_NAME,
+        trigger,
+        runId: run.runId,
+        status,
+        startedAt: run.startedAt,
+        counts,
       });
 
       console.log(`[SnapshotJob] Completed: ${updated}/${symbols.length} symbols updated`);
@@ -138,6 +160,13 @@ export class SnapshotJob {
       await this.saveStatus();
       await finishOperationalRun(run, "failed", {
         error: this.status.lastError,
+      });
+      recordJobFinished({
+        jobName: JOB_NAME,
+        trigger,
+        runId: run.runId,
+        status: "failed",
+        startedAt: run.startedAt,
       });
       console.error("[SnapshotJob] Failed:", err);
     }

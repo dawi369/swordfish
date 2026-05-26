@@ -1,6 +1,6 @@
 # System Context
 
-MK3 is a monorepo for the Swordfish futures terminal.
+Swordfish is a monorepo for the Swordfish futures terminal.
 
 ## Services
 
