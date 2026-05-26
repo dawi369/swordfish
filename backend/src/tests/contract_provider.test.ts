@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { ContractProvider } from "@/utils/contract_provider.js";
+import { telemetry } from "@/utils/telemetry.js";
 
 describe("ContractProvider", () => {
   test("filters, sorts, paginates, and caches active single contracts", async () => {
@@ -101,6 +102,7 @@ describe("ContractProvider", () => {
     spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ results: [] }), { status: 200 }) as any,
     );
+    const metricSpy = spyOn(telemetry, "metric").mockImplementation(() => {});
     const logSpy = spyOn(provider as any, "logInvalidTicker").mockImplementation(
       () => undefined,
     );
@@ -109,14 +111,58 @@ describe("ContractProvider", () => {
 
     expect(contracts).toEqual([]);
     expect(logSpy).toHaveBeenCalledWith("BADROOT");
+    expect(metricSpy).toHaveBeenCalledWith({
+      name: "swordfish.provider_contract_fetch.run",
+      type: "counter",
+      value: 1,
+      tags: {
+        provider: "massive",
+        root: "BADROOT",
+        status: "empty",
+      },
+    });
+  });
+
+  test("emits provider telemetry when Massive returns an HTTP failure", async () => {
+    const provider = new ContractProvider("test-key");
+    spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }) as any,
+    );
+    const metricSpy = spyOn(telemetry, "metric").mockImplementation(() => {});
+
+    const contracts = await provider.fetchActiveContractsDetailed("ES");
+
+    expect(contracts).toEqual([]);
+    expect(metricSpy).toHaveBeenCalledWith({
+      name: "swordfish.provider_contract_fetch.run",
+      type: "counter",
+      value: 1,
+      tags: {
+        provider: "massive",
+        root: "ES",
+        status: "failed",
+        http_status: 403,
+      },
+    });
   });
 
   test("throws when the fetch request itself fails", async () => {
     const provider = new ContractProvider("test-key");
     spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+    const metricSpy = spyOn(telemetry, "metric").mockImplementation(() => {});
 
     await expect(provider.fetchActiveContractsDetailed("ES")).rejects.toThrow(
       "network down",
     );
+    expect(metricSpy).toHaveBeenCalledWith({
+      name: "swordfish.provider_contract_fetch.run",
+      type: "counter",
+      value: 1,
+      tags: {
+        provider: "massive",
+        root: "ES",
+        status: "failed",
+      },
+    });
   });
 });

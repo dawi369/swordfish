@@ -12,6 +12,8 @@ import {
   getSessionWindowForTimestamp,
   isCurrentSessionBar,
 } from "@/utils/market_session.js";
+import { captureExceptionWithContext } from "@/utils/sentry.js";
+import { telemetry } from "@/utils/telemetry.js";
 import { Redis } from "ioredis";
 
 const IS_TEST_ENV = Bun.env.NODE_ENV === "test";
@@ -23,6 +25,7 @@ const KEYS = {
   PUBSUB_CHANNEL: "bars", // PUB/SUB: legacy support
   META_DATE: "meta:trading_date",
   META_COUNT: "meta:bar_count",
+  OPEN_TICKER: "meta:open_ticker",
   SUBSCRIBED_SYMBOLS: "meta:subscribed_symbols",
   SNAPSHOTS_INDEX: "meta:index:snapshots",
   ACTIVE_CONTRACTS_INDEX: "meta:index:active_contracts",
@@ -68,7 +71,6 @@ const TIMEFRAME_MS: Record<Timeframe, number> = {
 const DOWNSAMPLE_RULES: Array<{ source: Timeframe; dest: Timeframe; bucketMs: number }> = [
   { source: "1s", dest: "15s", bucketMs: TIMEFRAME_MS["15s"] },
   { source: "1s", dest: "30s", bucketMs: TIMEFRAME_MS["30s"] },
-  { source: "1s", dest: "1m", bucketMs: TIMEFRAME_MS["1m"] },
   { source: "1m", dest: "5m", bucketMs: TIMEFRAME_MS["5m"] },
   { source: "1m", dest: "15m", bucketMs: TIMEFRAME_MS["15m"] },
   { source: "1m", dest: "30m", bucketMs: TIMEFRAME_MS["30m"] },
@@ -137,6 +139,10 @@ class RedisStore {
   public redis: Redis;
   private tsInitialized = new Set<string>();
   private tsInitPromises = new Map<string, Promise<void>>();
+  private aggregateBars = new Map<string, Bar>();
+  private aggregateKeyBySymbol = new Map<string, string>();
+  private openTickerCache: { symbol: string | null; expiresAt: number } | null = null;
+  private lastRedisErrorCaptureAt = 0;
 
   constructor() {
     this.redis = new Redis({
@@ -169,11 +175,49 @@ class RedisStore {
         return;
       }
       console.error("Redis error:", err);
+      this.recordRedisClientError(err);
       if (err.code === "ECONNREFUSED") {
         console.error(
           "❌ Redis connection refused. Is the 'redis' container running? (docker compose up -d redis)",
         );
       }
+    });
+  }
+
+  private recordRedisClientError(error: unknown): void {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "unknown";
+    const message = error instanceof Error ? error.message : String(error);
+
+    telemetry.metric({
+      name: "swordfish.redis.client_error",
+      type: "counter",
+      value: 1,
+      tags: {
+        code,
+      },
+    });
+
+    const now = Date.now();
+    if (now - this.lastRedisErrorCaptureAt < 60_000) {
+      telemetry.breadcrumb("redis", "client error throttled", {
+        code,
+        message,
+      });
+      return;
+    }
+
+    this.lastRedisErrorCaptureAt = now;
+    captureExceptionWithContext(error, {
+      tags: {
+        component: "redis-store",
+        code,
+      },
+      extra: {
+        message,
+      },
     });
   }
 
@@ -191,7 +235,8 @@ class RedisStore {
   /**
    * Write a bar to all storage locations:
    * - HSET bar:latest {symbol} (latest bar per symbol in single hash)
-   * - TS.MADD ts:bar:1s:{symbol}:{field} (TimeSeries storage + downsample rules)
+   * - TS.MADD ts:bar:1m:{symbol}:{field} for the one-week hot cache
+   * - TS.MADD ts:bar:1s:{symbol}:{field} only for the open ticker
    * - XADD market_data (real-time stream)
    * - PUBLISH bars (legacy pub/sub)
    */
@@ -403,7 +448,11 @@ class RedisStore {
           "tf",
           tf,
         ];
-        await this.createSeries(key, retentionMs, labels);
+        await this.createSeries(
+          key,
+          tf === "1s" ? LIMITS.redisOpenTicker1sRetentionMs : retentionMs,
+          labels,
+        );
       }
     }
 
@@ -481,7 +530,69 @@ class RedisStore {
   }
 
   private async writeTimeSeries(bar: Bar): Promise<void> {
-    await this.writeTimeSeriesAtTimeframe(bar, "1s");
+    const minuteBar = this.aggregateBarForTimeframe(bar, "1m");
+    await this.writeTimeSeriesAtTimeframe(minuteBar, "1m");
+
+    if ((await this.getOpenTicker()) === bar.symbol) {
+      await this.writeTimeSeriesAtTimeframe(bar, "1s");
+    }
+  }
+
+  private aggregateBarForTimeframe(bar: Bar, timeframe: Timeframe): Bar {
+    const bucketMs = TIMEFRAME_MS[timeframe];
+    const bucketStart = Math.floor(normalizeTimestampMs(bar.startTime) / bucketMs) * bucketMs;
+    const key = `${timeframe}:${bar.symbol}:${bucketStart}`;
+    const symbolKey = `${timeframe}:${bar.symbol}`;
+    const previousKey = this.aggregateKeyBySymbol.get(symbolKey);
+    if (previousKey && previousKey !== key) {
+      this.aggregateBars.delete(previousKey);
+    }
+    const existing = this.aggregateBars.get(key);
+
+    const aggregate: Bar = existing
+      ? {
+          ...existing,
+          high: Math.max(existing.high, bar.high),
+          low: Math.min(existing.low, bar.low),
+          close: bar.close,
+          volume: existing.volume + bar.volume,
+          trades: existing.trades + bar.trades,
+          dollarVolume: (existing.dollarVolume ?? 0) + (bar.dollarVolume ?? 0),
+          endTime: bucketStart + bucketMs,
+        }
+      : {
+          ...bar,
+          startTime: bucketStart,
+          endTime: bucketStart + bucketMs,
+        };
+
+    this.aggregateBars.set(key, aggregate);
+    this.aggregateKeyBySymbol.set(symbolKey, key);
+    return aggregate;
+  }
+
+  async setOpenTicker(symbol: string | null): Promise<void> {
+    const normalized = symbol?.trim().toUpperCase() || null;
+    this.openTickerCache = { symbol: normalized, expiresAt: Date.now() + 1000 };
+
+    if (!normalized) {
+      await this.redis.del(KEYS.OPEN_TICKER);
+      return;
+    }
+
+    await this.redis.set(KEYS.OPEN_TICKER, normalized);
+  }
+
+  async getOpenTicker(): Promise<string | null> {
+    const now = Date.now();
+    if (this.openTickerCache && this.openTickerCache.expiresAt > now) {
+      return this.openTickerCache.symbol;
+    }
+
+    const symbol = await this.redis.get(KEYS.OPEN_TICKER);
+    const normalized = symbol?.trim().toUpperCase() || null;
+    this.openTickerCache = { symbol: normalized, expiresAt: now + 1000 };
+    return normalized;
   }
 
   private async writeTimeSeriesAtTimeframe(

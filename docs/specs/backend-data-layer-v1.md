@@ -21,7 +21,8 @@ Refine the backend/data layer into a production-quality beta runtime with explic
 - RedisTimeSeries stores rolling bars by symbol/timeframe/field.
 - Redis hashes store latest bars, sessions, and snapshots.
 - Redis JSON strings store active-contract and front-month caches.
-- SQLite local recovery store supports reconnect/backfill behavior.
+- SQLite local recovery store supports reconnect checkpoints and local
+  rehydration.
 - Postgres is the durable analytics store when `DATABASE_URL` is configured.
 - TimescaleDB features are optional and enabled only when available; the schema
   must boot on plain Postgres.
@@ -31,7 +32,8 @@ Refine the backend/data layer into a production-quality beta runtime with explic
 - Redis keyspace documented and covered by focused tests.
 - API response contracts documented and stable.
 - Session semantics explicit enough to reason about product behavior.
-- Recovery/backfill can be manually triggered and safely observed.
+- Recovery checkpoints can be observed, and disabled historical repair paths
+  are explicit.
 - Provider limitations are represented as confidence/status, not hidden as generic failures.
 - Admin endpoints are clearly separated from public endpoints.
 - Future AI/tool callers use typed backend services, not direct Redis/Postgres
@@ -55,11 +57,11 @@ Refine the backend/data layer into a production-quality beta runtime with explic
 - document errors and degraded states
 - add tests for endpoint contracts
 
-### 3. Recovery And Backfill
+### 3. Recovery And Historical Fill
 
 - clarify checkpoint lifecycle
-- test manual backfill path
-- define acceptable behavior when provider backfill fails
+- test that provider REST backfill stays disabled for futures history
+- define future flat-file fill behavior once Massive futures files exist
 - expose enough operator detail to debug gaps
 
 ### 4. Provider Quality
@@ -79,7 +81,8 @@ Refine the backend/data layer into a production-quality beta runtime with explic
 - expose latest market state through a service function
 - expose symbol coverage and missing/stale explanations through a service function
 - expose range bars with quality metadata through a service function
-- expose provider/backfill outcomes through a service function
+- expose historical availability and legacy provider diagnostic outcomes through
+  a service function
 - allow only safe dry-run diagnostics from tool-facing contracts
 - keep admin mutations behind authenticated routes and operational-run audit
 
@@ -107,7 +110,7 @@ Production durable-store verification after Railway Postgres is attached:
 
 ```bash
 cd backend
-BACKEND_BASE_URL=https://swordfish-backend-production.up.railway.app \
+BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
 HUB_API_KEY=... \
 bun run verify:production-data-layer
 ```

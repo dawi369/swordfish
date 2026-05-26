@@ -64,26 +64,9 @@ function createVerifierFetch(overrides: Record<string, unknown> = {}) {
         },
       },
     },
-    "/admin/durable/provider-outcomes?limit=25": {
-      count: 1,
-      outcomes: [
-        {
-          symbol: "ESH6",
-          status: "success",
-          barCount: 10,
-        },
-      ],
-    },
-    "/admin/durable/ingestion-runs?limit=25": {
-      count: 1,
-      runs: [
-        {
-          runId: "ingestion:provider_rest:1",
-          source: "provider_rest",
-          status: "success",
-          barCount: 10,
-        },
-      ],
+    "/admin/recovery/backfill": {
+      status: "disabled",
+      providerBars: 0,
     },
     "/admin/commands/hot-cache-rebuild-dry-run/run": {
       output: {
@@ -110,7 +93,8 @@ function createVerifierFetch(overrides: Record<string, unknown> = {}) {
       method: init?.method ?? "GET",
       apiKey: headers.get("X-API-Key"),
     });
-    return jsonResponse(payloads[path] ?? {}, payloads[path] ? 200 : 404);
+    const status = path === "/admin/recovery/backfill" && payloads[path] ? 410 : 200;
+    return jsonResponse(payloads[path] ?? {}, payloads[path] ? status : 404);
   };
 
   return { fetcher, calls };
@@ -130,15 +114,14 @@ describe("production data-layer verifier", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.results).toHaveLength(8);
+    expect(result.results).toHaveLength(7);
     expect(calls.map((call) => new URL(call.url).pathname + new URL(call.url).search)).toEqual([
       "/health",
       "/admin/health",
       "/admin/durable/symbols?limit=25",
       "/admin/durable/bars/latest?limit=25&source=live_ws",
       "/admin/coverage",
-      "/admin/durable/provider-outcomes?limit=25",
-      "/admin/durable/ingestion-runs?limit=25",
+      "/admin/recovery/backfill",
       "/admin/commands/hot-cache-rebuild-dry-run/run",
     ]);
     expect(calls.filter((call) => call.url.includes("/admin/")).every((call) => call.apiKey === "test-key")).toBe(true);
@@ -233,24 +216,11 @@ describe("production data-layer verifier", () => {
     );
   });
 
-  test("fails when ingestion audit rows do not include a successful run with bars", async () => {
+  test("fails when provider REST backfill endpoint is not disabled", async () => {
     const { fetcher } = createVerifierFetch({
-      "/admin/durable/ingestion-runs?limit=25": {
-        count: 2,
-        runs: [
-          {
-            runId: "ingestion:provider_rest:1",
-            source: "provider_rest",
-            status: "failed",
-            barCount: 0,
-          },
-          {
-            runId: "ingestion:provider_rest:2",
-            source: "provider_rest",
-            status: "success",
-            barCount: 0,
-          },
-        ],
+      "/admin/recovery/backfill": {
+        status: "enabled",
+        providerBars: 1,
       },
     });
 
@@ -264,38 +234,7 @@ describe("production data-layer verifier", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.results.find((check) => check.name === "durable ingestion runs")).toEqual(
-      expect.objectContaining({
-        ok: false,
-      }),
-    );
-  });
-
-  test("fails when provider outcome rows only record failed fetches", async () => {
-    const { fetcher } = createVerifierFetch({
-      "/admin/durable/provider-outcomes?limit=25": {
-        count: 1,
-        outcomes: [
-          {
-            symbol: "ESH6",
-            status: "failed",
-            barCount: 0,
-          },
-        ],
-      },
-    });
-
-    const result = await runProductionDataLayerVerification({
-      baseUrl: "https://backend.example.com",
-      apiKey: "test-key",
-      fetcher,
-      nowMs: Date.now(),
-      log: () => {},
-      error: () => {},
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.results.find((check) => check.name === "provider fetch outcomes")).toEqual(
+    expect(result.results.find((check) => check.name === "provider REST backfill disabled")).toEqual(
       expect.objectContaining({
         ok: false,
       }),

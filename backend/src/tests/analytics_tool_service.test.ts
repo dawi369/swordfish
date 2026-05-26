@@ -97,7 +97,7 @@ describe("AnalyticsToolService", () => {
     const explanation = await analyticsToolService.explainSymbolState("ESH6");
 
     expect(explanation.status).toBe("provider_no_data");
-    expect(explanation.reason).toContain("provider backfill");
+    expect(explanation.reason).toContain("Legacy provider diagnostics");
     expect(explanation.nextAction).toContain("contract symbol");
   });
 

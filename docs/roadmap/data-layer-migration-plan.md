@@ -107,6 +107,6 @@ explicit Redis freshness semantics.
 
 - Do not remove Redis latest-week serving until durable read paths are tested
   and startup rebuild is reliable.
-- Do not claim historical completeness before a flat-file importer or a verified
-  REST backfill has populated the requested range.
+- Do not claim historical completeness before a flat-file importer has
+  populated the requested range.
 - Do not use Redis job status as the only explanation for production incidents.

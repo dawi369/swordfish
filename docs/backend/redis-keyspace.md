@@ -10,6 +10,7 @@ This document describes current Redis behavior verified against `backend/src/ser
 | `ts:bar:{tf}:{symbol}:{field}` | RedisTimeSeries | `redis_store.writeBar` | rolling OHLCV/trades series by timeframe |
 | `market_data` | stream | `redis_store.writeBar` | realtime event stream for broadcaster |
 | `bars` | pub/sub channel | `redis_store.writeBar` | legacy compatibility channel |
+| `meta:open_ticker` | string | `/bars/open-ticker` | symbol that receives temporary 1-second bars |
 
 ## Sessions And Snapshots
 
@@ -94,7 +95,23 @@ Aggregations:
 
 ## Retention And Maintenance
 
-Current docs and code treat Redis as a rolling hot store. Manual clear and daily maintenance should not be assumed to provide archival durability.
+Current docs and code treat Redis as a rolling hot store. Manual clear and
+daily maintenance should not be assumed to provide archival durability.
+
+Current RedisTimeSeries retention is one rolling week via
+`LIMITS.redisTsRetentionMs`.
+
+Target retention from the current backend contract:
+
+- `1s` bars are for the currently open ticker and a short live window.
+- once data is one minute or more in the past, product reads should use `1m`
+  bars.
+- `1m` Redis bars retain one rolling week for fast charts and lightweight
+  analytics.
+- durable history lives in Postgres/Timescale `bars_1m`.
+
+The backend writes `1m` Redis bars directly for every live symbol. It writes
+`1s` Redis bars only when the bar symbol matches `meta:open_ticker`.
 
 Manual forced clear removes hot intraday keys such as:
 
@@ -115,4 +132,3 @@ curl -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/contracts/active |
 curl -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/front-months | jq
 curl -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/recovery/checkpoints | jq
 ```
-

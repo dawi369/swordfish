@@ -35,13 +35,12 @@ Check:
 - restart backend if Redis is reachable but backend connection is stale
 - run snapshot refresh if snapshots are missing
 - run front-month refresh if cache is stale
-- run recovery backfill if subscribed symbols have gaps
+- let live WebSocket writes refill hot Redis bars; durable one-minute history
+  remains in `bars_1m`
 
 ```bash
 curl -X POST -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/refresh-snapshots | jq
 curl -X POST -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/refresh-front-months | jq
-curl -X POST -H "X-API-Key: $HUB_API_KEY" http://localhost:3001/admin/recovery/backfill | jq
 ```
 
 Do not run `/admin/clear-redis` unless the goal is to intentionally clear hot data.
-

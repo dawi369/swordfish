@@ -37,7 +37,7 @@ Redis writes:
 - `HSET bar:latest {symbol}`
 - `TS.MADD ts:bar:{tf}:{symbol}:{field}`
 - `XADD market_data`
-- legacy publish to `bars`
+- legacy pub/sub publish to `bars` for compatibility
 - session hash update at `session:{symbol}:{sessionId}`
 - metadata updates such as bar count
 
@@ -47,9 +47,9 @@ Durable writes:
 - quality flags for invalid OHLC, volume, gaps, and spikes
 - telemetry for full or partial write success
 
-Batch ingestion writes from provider REST and future flat files go through
-`durable_bar_writer`, so they land in the same `bars_1m` model with source
-labels such as `provider_rest` or `flat_file`.
+There is no active provider REST backfill path for futures history. Future
+flat-file ingestion will go through `durable_bar_writer`, so parsed historical
+bars land in the same `bars_1m` model with `source=flat_file`.
 
 ## Read Path
 
@@ -68,7 +68,7 @@ labels such as `provider_rest` or `flat_file`.
   continue and write failures are logged.
 - Provider sends incomplete data: front-month and snapshot quality degrade.
 - RedisTimeSeries module missing: bar range writes/reads fail.
-- Local recovery DB unavailable: reconnect gap behavior degrades.
+- Local recovery DB unavailable: reconnect checkpoint/cache behavior degrades.
 
 ## Verification
 

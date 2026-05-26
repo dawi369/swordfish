@@ -114,7 +114,7 @@ Then verify:
 
 ```bash
 cd backend
-BACKEND_BASE_URL=https://swordfish-backend-production.up.railway.app \
+BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
 HUB_API_KEY=... \
 bun run verify:production-data-layer
 ```
@@ -129,38 +129,30 @@ pause, either wait for the next live bar or set a deliberate one-off threshold:
 
 ```bash
 PRODUCTION_DATA_LAYER_MAX_LIVE_BAR_AGE_MS=7200000 \
-BACKEND_BASE_URL=https://swordfish-backend-production.up.railway.app \
+BACKEND_BASE_URL=https://mk3-backend-production.up.railway.app \
 HUB_API_KEY=... \
 bun run verify:production-data-layer
 ```
 
-If `provider fetch outcomes` fails because none exist yet, intentionally run
-one manual backfill before re-running the verifier. If it fails because all
-recent outcomes are `failed`, inspect backend logs and fix the provider/backfill
-failure before accepting the production data layer. The same backfill should
-also create `/admin/durable/ingestion-runs` audit rows:
-
-```bash
-curl -X POST \
-  -H "X-API-Key: $HUB_API_KEY" \
-  https://swordfish-backend-production.up.railway.app/admin/recovery/backfill | jq
-```
+The verifier expects `POST /admin/recovery/backfill` to return `410 disabled`.
+Do not run provider REST backfill for futures history. Historical fill waits
+for Massive futures flat-file access.
 
 If `live durable bars_1m rows` fails, confirm the websocket has run long enough
 to write at least one `source=live_ws` row:
 
 ```bash
 curl -H "X-API-Key: $HUB_API_KEY" \
-  "https://swordfish-backend-production.up.railway.app/admin/durable/bars/latest?limit=25&source=live_ws" | jq
+  "https://mk3-backend-production.up.railway.app/admin/durable/bars/latest?limit=25&source=live_ws" | jq
 ```
 
-After durable `bars_1m` rows and provider outcomes are verified, an operator
-can dry-run hot-cache hydration:
+After durable `bars_1m` rows and disabled-backfill behavior are verified, an
+operator can dry-run hot-cache hydration:
 
 ```bash
 curl -X POST \
   -H "X-API-Key: $HUB_API_KEY" \
-  "https://swordfish-backend-production.up.railway.app/admin/hot-cache/rebuild?dryRun=true" | jq
+  "https://mk3-backend-production.up.railway.app/admin/hot-cache/rebuild?dryRun=true" | jq
 ```
 
 Only enable startup rebuild after the verifier passes:
@@ -182,3 +174,16 @@ Rollback/degraded mode:
 - Build failure: TypeScript, dependency install, Dockerfile, lockfile, Next build.
 - Deploy failure: app starts but healthcheck never passes.
 - Runtime failure: deploy succeeds, then logs/HTTP show degraded behavior.
+
+## Current Backend Deploy Caveat
+
+The current production backend service is still named `mk3-backend`, and its
+Railway root directory is `/backend`. Deploy backend changes from the repo root:
+
+```bash
+railway up --service mk3-backend --environment production --detach
+```
+
+Do not combine `./backend --path-as-root` with this service config. That makes
+the uploaded snapshot root differ from the configured `/backend` root and can
+fail before the build starts.

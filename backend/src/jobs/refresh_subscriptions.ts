@@ -9,6 +9,9 @@ import {
   finishOperationalRun,
   startOperationalRun,
 } from "@/utils/operational_runs.js";
+import { recordJobFinished, recordJobStarted } from "@/utils/job_observability.js";
+
+const JOB_NAME = "subscription-refresh";
 
 class MonthlySubscriptionJob {
   private cronJob: CronJob | null = null;
@@ -136,9 +139,10 @@ class MonthlySubscriptionJob {
     this.status.lastRefreshDetails = [];
     const run = await startOperationalRun({
       runType: "job",
-      name: "subscription-refresh",
+      name: JOB_NAME,
       trigger,
     });
+    recordJobStarted({ jobName: JOB_NAME, trigger, runId: run.runId });
 
     const refreshTasks: Promise<RefreshDetails>[] = [];
     const assetClasses: MassiveAssetClass[] = [
@@ -203,22 +207,32 @@ class MonthlySubscriptionJob {
     await this.saveStatus();
     const changedCount = results.filter((r) => r.changed).length;
     const successCount = results.filter((r) => r.success).length;
-    await finishOperationalRun(
-      run,
-      anyFailure ? (anySuccess ? "partial_success" : "failed") : "success",
-      {
-        counts: {
-          assetClasses: results.length,
-          successfulAssetClasses: successCount,
-          failedAssetClasses: results.length - successCount,
-          changedAssetClasses: changedCount,
-        },
-        error: anyFailure ? this.status.lastError : null,
-        metadata: {
-          details: results,
-        },
+    const status = anyFailure
+      ? anySuccess
+        ? "partial_success"
+        : "failed"
+      : "success";
+    const counts = {
+      assetClasses: results.length,
+      successfulAssetClasses: successCount,
+      failedAssetClasses: results.length - successCount,
+      changedAssetClasses: changedCount,
+    };
+    await finishOperationalRun(run, status, {
+      counts,
+      error: anyFailure ? this.status.lastError : null,
+      metadata: {
+        details: results,
       },
-    );
+    });
+    recordJobFinished({
+      jobName: JOB_NAME,
+      trigger,
+      runId: run.runId,
+      status,
+      startedAt: run.startedAt,
+      counts,
+    });
 
     // Summary
     console.log(`Summary: ${successCount}/${results.length} successful, ${changedCount} changed`);

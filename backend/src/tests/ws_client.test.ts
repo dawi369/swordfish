@@ -1,6 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { MassiveWSClient } from "@/server/api/massive/ws_client.js";
-import { recoveryService } from "@/services/recovery_service.js";
 import { marketDataWriter } from "@/services/market_data_writer.js";
 import * as massiveUtils from "@/utils/massive.utils.js";
 import type { Bar } from "@/types/common.types.js";
@@ -111,7 +110,7 @@ describe("MassiveWSClient", () => {
     expect((client as any).recoveryBuffer).toHaveLength(0);
   });
 
-  test("reconnect runs provider backfill and clears disconnect state", async () => {
+  test("reconnect flushes buffered live bars without provider backfill", async () => {
     const client = new MassiveWSClient();
     (client as any).market = "futures";
     (client as any).subscriptions = [
@@ -122,28 +121,10 @@ describe("MassiveWSClient", () => {
     (client as any).connect = mock(async () => {});
     (client as any).subscribe = mock(async () => {});
     (client as any).flushBufferedBars = mock(async () => 2);
-    const backfillSpy = spyOn(
-      recoveryService,
-      "backfillSymbolsFromProvider",
-    ).mockResolvedValue([
-      {
-        symbol: "ESH9",
-        source: "reconnect",
-        startMs: 1,
-        endMs: 2,
-        providerBars: 3,
-        checkpointBefore: 0,
-        checkpointAfter: 1,
-      },
-    ]);
 
     await (client as any).reconnect();
 
-    expect(backfillSpy).toHaveBeenCalledWith(["ESH9", "NQH9"], {
-      source: "reconnect",
-      disconnectedAt: 1234,
-      excludeCurrentMinute: true,
-    });
+    expect((client as any).flushBufferedBars).toHaveBeenCalled();
     expect((client as any).lastDisconnectAt).toBeNull();
   });
 

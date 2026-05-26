@@ -51,6 +51,7 @@ function createJsonGetter({
     options: {
       method?: "GET" | "POST";
       admin?: boolean;
+      expectedStatus?: number;
     } = {},
   ): Promise<T> {
     const headers: Record<string, string> = {};
@@ -67,7 +68,8 @@ function createJsonGetter({
     });
     const body = await response.json().catch(() => ({}));
 
-    if (!response.ok) {
+    const expectedStatus = options.expectedStatus ?? 200;
+    if (response.status !== expectedStatus) {
       throw new Error(
         `${options.method ?? "GET"} ${path} returned ${response.status}: ${JSON.stringify(body)}`,
       );
@@ -230,63 +232,26 @@ async function checkCoverage(
   );
 }
 
-async function checkProviderOutcomes(
+async function checkBackfillDisabled(
   getJson: ReturnType<typeof createJsonGetter>,
 ): Promise<CheckResult> {
   const payload = await getJson<{
-    count: number;
-    outcomes: Array<{
-      symbol: string;
-      status: string;
-      barCount: number;
-    }>;
-  }>("/admin/durable/provider-outcomes?limit=25", { admin: true });
+    status?: string;
+    providerBars?: number;
+  }>("/admin/recovery/backfill", {
+    method: "POST",
+    admin: true,
+    expectedStatus: 410,
+  });
 
-  const usefulOutcome = payload.outcomes.find(
-    (outcome) => outcome.status === "success" || outcome.status === "empty",
-  );
-  if (!usefulOutcome) {
+  if (payload.status !== "disabled" || payload.providerBars !== 0) {
     return fail(
-      "provider fetch outcomes",
-      payload.count === 0
-        ? "no provider outcomes found; run /admin/recovery/backfill intentionally first"
-        : "no successful or empty provider outcome found; investigate failed backfill before accepting production",
+      "provider REST backfill disabled",
+      `status=${payload.status ?? "missing"} providerBars=${payload.providerBars ?? "missing"}`,
     );
   }
 
-  return pass(
-    "provider fetch outcomes",
-    `count=${payload.count} sample=${usefulOutcome.symbol}:${usefulOutcome.status} bars=${usefulOutcome.barCount}`,
-  );
-}
-
-async function checkIngestionRuns(
-  getJson: ReturnType<typeof createJsonGetter>,
-): Promise<CheckResult> {
-  const payload = await getJson<{
-    count: number;
-    runs: Array<{
-      runId: string;
-      source: string;
-      status: string;
-      barCount: number;
-    }>;
-  }>("/admin/durable/ingestion-runs?limit=25", { admin: true });
-
-  const successfulRun = payload.runs.find(
-    (run) => run.status === "success" && run.barCount > 0,
-  );
-  if (!successfulRun) {
-    return fail(
-      "durable ingestion runs",
-      "no successful ingestion run with bars found; run /admin/recovery/backfill intentionally first",
-    );
-  }
-
-  return pass(
-    "durable ingestion runs",
-    `count=${payload.count} sample=${successfulRun.source}:${successfulRun.status} bars=${successfulRun.barCount}`,
-  );
+  return pass("provider REST backfill disabled", "admin backfill endpoint returns 410 disabled");
 }
 
 async function checkHotCacheDryRun(
@@ -345,8 +310,7 @@ export async function runProductionDataLayerVerification(
     (getJson: ReturnType<typeof createJsonGetter>) =>
       checkLiveDurableBars(getJson, { maxLiveBarAgeMs, nowMs }),
     checkCoverage,
-    checkProviderOutcomes,
-    checkIngestionRuns,
+    checkBackfillDisabled,
     checkHotCacheDryRun,
   ];
   const results: CheckResult[] = [];

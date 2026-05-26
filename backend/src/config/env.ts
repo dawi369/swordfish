@@ -94,6 +94,8 @@ export const HUB_BOOTSTRAP_SNAPSHOTS_ON_STARTUP =
   getOptionalEnvVarAsBoolean("HUB_BOOTSTRAP_SNAPSHOTS_ON_STARTUP") ?? true;
 export const HUB_REBUILD_HOT_CACHE_ON_STARTUP =
   getOptionalEnvVarAsBoolean("HUB_REBUILD_HOT_CACHE_ON_STARTUP") ?? false;
+export const HUB_DISABLE_PROVIDER_CONNECTION =
+  getOptionalEnvVarAsBoolean("HUB_DISABLE_PROVIDER_CONNECTION") ?? false;
 export const DATA_QUALITY_GAP_THRESHOLD_MS =
   getOptionalEnvVarAsInt("DATA_QUALITY_GAP_THRESHOLD_MS") ?? 90_000;
 export const DATA_QUALITY_SPIKE_THRESHOLD_PCT =

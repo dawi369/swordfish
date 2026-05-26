@@ -24,7 +24,9 @@ describe("TimescaleStore", () => {
     await timescaleStore.init();
     initialized = timescaleStore.isConnected;
     if (!initialized) {
-      console.log("TimescaleDB not connected, some tests will be skipped");
+      throw new Error(
+        "Timescale test runtime requires a reachable Postgres/Timescale instance. Start it with `docker compose --profile durable up -d timescaledb` or provide DATABASE_URL.",
+      );
     }
   });
 
@@ -88,38 +90,13 @@ describe("TimescaleStore", () => {
     });
 
     test.skipIf(!runTimescaleTests)("ping returns true when connected", async () => {
-      if (!initialized) return;
       const result = await timescaleStore.ping();
       expect(result).toBe(true);
     });
   });
 
-  describe("insertBar", () => {
-    test.skipIf(!runTimescaleTests)("inserts bar without error", async () => {
-      if (!initialized) return;
-
-      const bar: Bar = {
-        symbol: testSymbol,
-        open: 100,
-        high: 105,
-        low: 95,
-        close: 102,
-        volume: 1000,
-        trades: 50,
-        startTime: Date.now(),
-        endTime: Date.now() + 60000,
-        dollarVolume: 102000,
-      };
-
-      // Should not throw
-      await expect(timescaleStore.insertBar(bar)).resolves.toBeUndefined();
-    });
-  });
-
   describe("bars_1m", () => {
     test.skipIf(!runTimescaleTests)("upserts and reads canonical 1m bars", async () => {
-      if (!initialized) return;
-
       const startTime = Date.now();
       const bar: Bar = {
         symbol: testSymbol,
@@ -149,12 +126,8 @@ describe("TimescaleStore", () => {
         trades: 42,
       }));
     });
-  });
 
-  describe("insertBatch", () => {
-    test.skipIf(!runTimescaleTests)("inserts multiple bars without error", async () => {
-      if (!initialized) return;
-
+    test.skipIf(!runTimescaleTests)("upserts multiple canonical 1m bars", async () => {
       const bars: Bar[] = [
         {
           symbol: testSymbol,
@@ -182,30 +155,20 @@ describe("TimescaleStore", () => {
         },
       ];
 
-      await expect(timescaleStore.insertBatch(bars)).resolves.toBeUndefined();
-    });
-  });
+      await expect(timescaleStore.upsertBars1m(bars, "live_ws")).resolves.toBe(2);
 
-  describe("getHistory", () => {
-    test.skipIf(!runTimescaleTests)("returns array of bars", async () => {
-      if (!initialized) return;
-
-      // Query for a wide time range
-      const now = Date.now();
-      const history = await timescaleStore.getHistory(
+      const history = await timescaleStore.getBars1mRange(
         testSymbol,
-        now - 86400000, // 1 day ago
-        now + 86400000  // 1 day ahead
+        bars[0]!.startTime - 1,
+        bars[1]!.startTime + 1,
       );
 
-      expect(Array.isArray(history)).toBe(true);
+      expect(history).toHaveLength(2);
     });
   });
 
   describe("recordOperationalRun", () => {
     test.skipIf(!runTimescaleTests)("upserts operational run state", async () => {
-      if (!initialized) return;
-
       const startedAt = Date.now();
       const baseRun: OperationalRunRecord = {
         runId: `test-operational-run-${startedAt}`,
@@ -237,8 +200,6 @@ describe("TimescaleStore", () => {
 
   describe("recordIngestionRun", () => {
     test.skipIf(!runTimescaleTests)("upserts ingestion run state", async () => {
-      if (!initialized) return;
-
       const startedAt = Date.now();
       const runId = `test-ingestion-run-${startedAt}`;
 
@@ -279,8 +240,6 @@ describe("TimescaleStore", () => {
 
   describe("recordDurableQualitySummary", () => {
     test.skipIf(!runTimescaleTests)("upserts quality summary state", async () => {
-      if (!initialized) return;
-
       const startMs = Date.now();
       const summary = await timescaleStore.getDurableQualitySummary(
         testSymbol,
