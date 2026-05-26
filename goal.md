@@ -429,6 +429,9 @@ regression checks. Production evidence is the gate.
 
 Done or partially done:
 
+- goal state in the Codex tool may still show `blocked` from the earlier
+  Trigger-auth blocker; the live project status is no longer blocked and the
+  real remaining acceptance item is first automatic Trigger schedule evidence
 - Trigger.dev integration files and tests exist
 - scheduled jobs are wrapped instead of rewritten
 - a test guards against Trigger tasks opening a live Massive WebSocket
@@ -534,13 +537,15 @@ Done or partially done:
   with `lastSuccess=true` and `symbolsUpdated=171`
 - Railway production has `HUB_ENABLE_SCHEDULED_JOBS=false`, so recurring
   backend-local cron duplication is disabled while Trigger.dev owns schedules
+- production data-layer verifier passed again at `2026-05-26T12:49Z` after
+  the Trigger/env work, with Redis connected, Timescale/Postgres connected,
+  Massive WS connected, live `bars_1m source=live_ws` rows, disabled provider
+  REST backfill, and hot-cache rebuild dry-run checks
 
 Still required:
 
-- repeat Railway production data-layer verification after any further backend
-  deploy that can affect Redis, durable writes, health, or admin routes
 - monitor the first automatic Trigger scheduled run after the next 2:00 AM ET
-  window and confirm it matches the manual-run evidence
+  window on `2026-05-27` and confirm it matches the manual-run evidence
 
 ## Definition Of Done
 
