@@ -1,6 +1,7 @@
 # Use the official Bun image
 FROM oven/bun:1 AS base
 WORKDIR /app
+ENV BUN_INSTALL_CACHE_DIR=/tmp/bun-install-cache
 
 # Install dependencies into temp folder
 # This will cache them and speed up future builds

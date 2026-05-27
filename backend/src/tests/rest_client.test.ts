@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   handleRequest,
+  getProviderConnectionHealth,
   resetRateLimitsForTesting,
   setMassiveClientForTesting,
 } from "@/server/api/rest_client.js";
@@ -31,6 +32,13 @@ function createRequest(
 describe("REST request handler", () => {
   beforeEach(() => {
     resetRateLimitsForTesting();
+  });
+
+  test("treats provider-disabled mode as healthy without a websocket", () => {
+    expect(getProviderConnectionHealth(false, true)).toEqual({
+      healthy: true,
+      status: "disabled",
+    });
   });
 
   test("returns minimal public health status", async () => {

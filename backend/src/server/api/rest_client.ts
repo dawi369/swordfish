@@ -12,6 +12,7 @@ import {
   HUB_PUBLIC_RATE_LIMIT_MAX,
   HUB_ADMIN_RATE_LIMIT_WINDOW_MS,
   HUB_ADMIN_RATE_LIMIT_MAX,
+  HUB_DISABLE_PROVIDER_CONNECTION,
 } from "@/config/env.js";
 import { dailyClearJob } from "@/jobs/clear_daily.js";
 import { monthlySubscriptionJob } from "@/jobs/refresh_subscriptions.js";
@@ -37,6 +38,20 @@ let massiveClient: MassiveWSClient | null = null;
 
 export function setMassiveClientForTesting(client: MassiveWSClient | null): void {
   massiveClient = client;
+}
+
+export function getProviderConnectionHealth(
+  connected: boolean,
+  providerDisabled = HUB_DISABLE_PROVIDER_CONNECTION,
+): { healthy: boolean; status: "connected" | "disconnected" | "disabled" } {
+  if (providerDisabled) {
+    return { healthy: true, status: "disabled" };
+  }
+
+  return {
+    healthy: connected,
+    status: connected ? "connected" : "disconnected",
+  };
 }
 
 // Helper for CORS headers
@@ -466,9 +481,10 @@ async function buildAdminOpsPayload() {
   const latestActiveContractTime = maxTimestamp(activeContractTimestamps);
   const latestRecoveryCheckpointTime = maxTimestamp(recoveryTimestamps);
   const wsConnected = massiveClient?.isConnected() || false;
+  const providerHealth = getProviderConnectionHealth(wsConnected);
   const currentSubscriptions = getCurrentSubscriptions();
   const servicesHealthy =
-    redisOk && wsConnected && (!timescaleEnabled || timescaleOk);
+    redisOk && providerHealth.healthy && (!timescaleEnabled || timescaleOk);
   const jobs = buildJobState();
   const jobStates = Object.fromEntries(
     Object.entries(jobs).map(([key, job]) => [
@@ -510,6 +526,7 @@ async function buildAdminOpsPayload() {
       timescale_enabled: timescaleEnabled,
       timescale_connected: timescaleOk,
       massive_ws: wsConnected,
+      provider_disabled: HUB_DISABLE_PROVIDER_CONNECTION,
     },
   });
   telemetry.metric({
@@ -533,7 +550,7 @@ async function buildAdminOpsPayload() {
           ? "connected"
           : "disconnected"
         : "disabled",
-      massiveWs: wsConnected ? "connected" : "disconnected",
+      massiveWs: providerHealth.status,
     },
     redis: {
       ...redisStats,
@@ -1211,8 +1228,9 @@ export async function handleRequest(
     }
 
     const wsConnected = massiveClient?.isConnected() || false;
+    const providerHealth = getProviderConnectionHealth(wsConnected);
     const allHealthy =
-      redisOk && wsConnected && (!timescaleEnabled || timescaleOk);
+      redisOk && providerHealth.healthy && (!timescaleEnabled || timescaleOk);
     const status = allHealthy ? "ok" : "degraded";
 
     return respond({
@@ -1225,7 +1243,7 @@ export async function handleRequest(
             ? "connected"
             : "disconnected"
           : "disabled",
-        massiveWs: wsConnected ? "connected" : "disconnected",
+        massiveWs: providerHealth.status,
       },
     });
   }

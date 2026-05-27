@@ -541,11 +541,65 @@ Done or partially done:
   the Trigger/env work, with Redis connected, Timescale/Postgres connected,
   Massive WS connected, live `bars_1m source=live_ws` rows, disabled provider
   REST backfill, and hot-cache rebuild dry-run checks
+- remote-first CI/CD documentation now exists in
+  `docs/runbooks/remote-dev-ci-cd.md`
+- GitHub Actions fast gates now cover pull requests and pushes to `dev` and
+  `main` for backend typecheck/smoke and frontend lint/test/build
+- Railway `development` now has separate Redis and Postgres services:
+  `Redis-FBxD` and `Postgres-89lN`
+- Railway `development` backend is deployed at
+  `https://mk3-backend-development.up.railway.app` with
+  `HUB_DISABLE_PROVIDER_CONNECTION=true`, production schedules disabled, and
+  development Redis/Postgres connected
+- development backend `/health` returns `status=ok`, Redis connected,
+  Timescale/Postgres connected, and `massiveWs=disabled`
+- Railway `development` frontend is deployed at
+  `https://mk3-frontend-development.up.railway.app` and points at the
+  development backend
+- development frontend `/health` returns `ok`, and the home page serves
+  successfully
+- backend provider-disabled health semantics now report Massive WS as
+  `disabled` and exclude it from the degraded calculation
+- Sentry projects `swordfish-frontend` and `swordfish-backend` were created
+  under org `david-erwin`
+- Sentry default DSNs were retrieved and wired into Railway development and
+  production variables for frontend and backend
+- Sentry smoke events were dispatched and retrieved by event ID in both new
+  projects
+- Railway development and production services were redeployed after the Sentry
+  variable update; public health checks passed for development backend,
+  development frontend, production backend, and production frontend
+- Railway CLI OAuth refresh failed after the redeploys were accepted, so direct
+  CLI deployment-status polling needs `railway login` refreshed, but public
+  service health is green
+- `RAILWAY_TOKEN` was added locally and works when `~/.zshrc` is explicitly
+  sourced
+- the current `RAILWAY_TOKEN` can read production services/config but is
+  rejected for `development` service reads, so a dev-capable Railway account or
+  project token is still needed for fully non-interactive management of both
+  environments
+- the remote dev/CI runbook now documents the actual Railway environments,
+  service URLs, health checks, Sentry projects, and CLI auth behavior
+- the remote dev/CI runbook now documents the two-token Railway CLI pattern:
+  `RAILWAY_TOKEN_PRODUCTION`, `RAILWAY_TOKEN_DEVELOPMENT`, and per-command
+  `RAILWAY_TOKEN=... railway ...` wrappers
+- the remote dev/CI runbook documents the known transient Railway frontend
+  build failure mode where a build can be terminated during dependency install
+  while a concurrent deployment of the same code succeeds
+- the remote dev/CI runbook now distinguishes active Railway service health
+  from deployment history, including the current development frontend case
+  where deployment `1680ddc8-7bba-43ff-bd60-b4029cd71909` is serving
+  successfully while newer deployment `a0ecc076-b752-4597-85b3-bae49050320d`
+  is a failed stopped build record
+- the deployment docs now state that routine deployments should be Git-driven
+  through `dev` and `main` merges, not manual `railway up`
 
 Still required:
 
 - monitor the first automatic Trigger scheduled run after the next 2:00 AM ET
   window on `2026-05-27` and confirm it matches the manual-run evidence
+- replace or extend the local Railway token so non-interactive CLI access can
+  manage both `development` and `production`
 
 ## Definition Of Done
 

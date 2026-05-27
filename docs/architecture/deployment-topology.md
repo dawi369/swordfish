@@ -1,12 +1,12 @@
 # Deployment Topology
 
-Railway is the intended production target.
+Railway is the intended remote runtime target.
 
 ## Services
 
-- `swordfish-frontend`
+- `mk3-frontend`
   Root directory: `/frontend`
-- `swordfish-backend`
+- `mk3-backend`
   Root directory: `/backend`
 - Redis service
   Private networking only.
@@ -30,6 +30,9 @@ Important variables:
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `NEXT_PUBLIC_HUB_URL`
+- `NEXT_PUBLIC_SENTRY_DSN`
+- `NEXT_PUBLIC_SENTRY_ENVIRONMENT`
+- `NEXT_PUBLIC_SENTRY_RELEASE`
 
 ## Backend
 
@@ -52,14 +55,31 @@ Important variables:
 - `REDIS_URL` or `REDIS_HOST`/`REDIS_PORT`
 - `DATABASE_URL`
 - `HUB_REBUILD_HOT_CACHE_ON_STARTUP=false`
+- `SENTRY_DSN`
+- `SENTRY_ENVIRONMENT`
+- `SENTRY_RELEASE`
 
 ## Deployment Notes
 
 - The backend latest deployment can succeed while frontend fails, and vice versa.
-- Railway branch deployments currently come from `main`.
+- Railway production deployments come from `main`.
+- Railway development deployments come from `dev`.
+- Routine app releases should be Git-driven through branch merges, not
+  `railway up`. Manual Railway deploys are for bootstrap/emergency validation
+  only and should be recorded when used.
+- Railway can show a failed newest deployment while the active service remains
+  healthy on a previous successful deployment. Check active service status and
+  public `/health`, then inspect logs for the specific failed deployment ID.
+- The development backend should set `HUB_DISABLE_PROVIDER_CONNECTION=true` so
+  it never competes with production for the single Massive live WebSocket.
+- The production backend should keep Massive live WebSocket enabled and
+  `HUB_ENABLE_SCHEDULED_JOBS=false`; Trigger.dev owns recurring production
+  schedules.
 - Frontend production builds run `next build`; TypeScript failures block deploy.
 - Backend deploy health depends on `/health` returning healthy within Railway's retry window.
-- Durable analytics are enabled when `DATABASE_URL` is attached to `swordfish-backend`;
+- Durable analytics are enabled when `DATABASE_URL` is attached to `mk3-backend`;
   Redis remains the hot serving layer.
 
-See [../runbooks/railway-deploy.md](../runbooks/railway-deploy.md) and [../runbooks/failed-build-debugging.md](../runbooks/failed-build-debugging.md).
+See [../runbooks/railway-deploy.md](../runbooks/railway-deploy.md),
+[../runbooks/remote-dev-ci-cd.md](../runbooks/remote-dev-ci-cd.md), and
+[../runbooks/failed-build-debugging.md](../runbooks/failed-build-debugging.md).

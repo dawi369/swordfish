@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+  push:
+    branches:
+      - dev
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc --noEmit --skipLibCheck
+
+      - name: Smoke tests
+        run: bun run test:smoke
+        env:
+          NODE_ENV: test
+          MASSIVE_API_KEY: ci-placeholder
+          MASSIVE_API_URL: https://api.massive.com
+          HUB_HOST: "::"
+          HUB_PORT: "3001"
+          HUB_API_KEY: ci-placeholder
+          REDIS_HOST: localhost
+          REDIS_PORT: "6379"
+          HUB_ENABLE_SCHEDULED_JOBS: "false"
+          HUB_DISABLE_PROVIDER_CONNECTION: "true"
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_PUBLIC_SITE_URL: https://ci.swordfish.local
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder
+      NEXT_PUBLIC_HUB_URL: https://backend.ci.swordfish.local
+      HUB_API_KEY: ci-placeholder
+      ADMIN_PANEL_PASSWORD: ci-placeholder
+      ADMIN_PANEL_SESSION_SECRET: ci-placeholder-session-secret
+      RESEND_API_KEY: ci-placeholder
+      FEATURE_REQUEST_EMAIL: founders@swordfish.trade
+      WAITLIST_ONLY: "false"
+      NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE: "0"
+      SENTRY_TRACES_SAMPLE_RATE: "0"
+      NEXT_PUBLIC_SENTRY_REPLAY_SESSION_SAMPLE_RATE: "0"
+      NEXT_PUBLIC_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Tests
+        run: bun run test
+
+      - name: Build
+        run: bun run build
